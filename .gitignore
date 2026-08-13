@@ -1,0 +1,27 @@
+# Local bootstrap / split tooling (machine-specific paths)
+tools/
+
+# IDE
+.cursor/
+
+# Virtualenv
+.venv/
+
+# Local test photos (optional; tests generate synthetic images if missing)
+TEST IMAGES/
+tests/fixtures/golden/
+
+# App output
+output/
+perf_reports/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# PyInstaller
+dist/
+build/
+*.spec.bak
