@@ -1,0 +1,171 @@
+using ImageStacker.Core.Io;
+using ImageStacker.Core.Layout;
+using NetVips;
+
+namespace ImageStacker.Core.Imaging;
+
+public static class ImagePipeline
+{
+    public static NetVips.Image LoadForCell(SourceImageCache cache, string path, int targetWidth, int targetHeight)
+    {
+        // Full (cached) decode for export/cover so pan has real source excess.
+        // Do not Thumbnail to the cell size first — that center-covers and makes pan a no-op.
+        // Copy so callers may dispose without invalidating the shared cache entry.
+        _ = targetWidth;
+        _ = targetHeight;
+        return cache.GetCopy(path);
+    }
+
+    public static NetVips.Image FlattenAlpha(NetVips.Image image)
+    {
+        using var srgb = image.Colourspace(Enums.Interpretation.Srgb);
+        if (!srgb.HasAlpha())
+        {
+            return EnsureRgb(srgb);
+        }
+
+        using var white = NetVips.Image.Black(srgb.Width, srgb.Height)
+            .NewFromImage(new double[] { 255, 255, 255 })
+            .Cast(Enums.BandFormat.Uchar);
+        using var flattened = white.Composite2(srgb, Enums.BlendMode.Over);
+        return EnsureRgb(flattened);
+    }
+
+    public static NetVips.Image EnsureRgb(NetVips.Image image)
+    {
+        using var srgb = image.Colourspace(Enums.Interpretation.Srgb);
+        if (srgb.Bands == 3)
+        {
+            return srgb.Copy();
+        }
+
+        if (srgb.Bands > 3)
+        {
+            return srgb.ExtractBand(0, n: 3).Copy();
+        }
+
+        if (srgb.Bands == 1)
+        {
+            return srgb.Bandjoin([srgb, srgb]).Copy();
+        }
+
+        return srgb.Copy();
+    }
+
+    public static NetVips.Image CoverResizePanned(
+        NetVips.Image source,
+        int targetWidth,
+        int targetHeight,
+        double panX,
+        double panY)
+    {
+        panX = Math.Clamp(panX, -1.0, 1.0);
+        panY = Math.Clamp(panY, -1.0, 1.0);
+
+        using var flattened = FlattenAlpha(source);
+        int srcW = flattened.Width;
+        int srcH = flattened.Height;
+        if (srcW <= 0 || srcH <= 0)
+        {
+            throw new InvalidOperationException("Source image has invalid dimensions.");
+        }
+
+        double scale = Math.Max(targetWidth / (double)srcW, targetHeight / (double)srcH);
+        double winW = targetWidth / scale;
+        double winH = targetHeight / scale;
+
+        double excessW = srcW - winW;
+        double excessH = srcH - winH;
+
+        int left = excessW > 0 ? (int)Math.Round((1.0 + panX) * excessW / 2.0) : 0;
+        int top = excessH > 0 ? (int)Math.Round((1.0 + panY) * excessH / 2.0) : 0;
+
+        int maxLeft = (int)Math.Max(0, Math.Floor(excessW));
+        int maxTop = (int)Math.Max(0, Math.Floor(excessH));
+        left = Math.Clamp(left, 0, maxLeft);
+        top = Math.Clamp(top, 0, maxTop);
+
+        int cropW = Math.Max(1, (int)Math.Round(winW));
+        int cropH = Math.Max(1, (int)Math.Round(winH));
+        cropW = Math.Min(cropW, srcW - left);
+        cropH = Math.Min(cropH, srcH - top);
+
+        using var cropped = flattened.ExtractArea(left, top, cropW, cropH);
+        double resizeScale = targetWidth / (double)cropW;
+        using var resized = cropped.Resize(resizeScale, kernel: Enums.Kernel.Lanczos3);
+        if (resized.Width != targetWidth || resized.Height != targetHeight)
+        {
+            return resized.Crop(0, 0, targetWidth, targetHeight).Copy();
+        }
+
+        return resized.Copy();
+    }
+
+    public static NetVips.Image ApplyTransforms(NetVips.Image image, bool flipH, bool grayscale)
+    {
+        NetVips.Image current = image.Copy();
+        if (flipH)
+        {
+            using var flipped = current.Flip(Enums.Direction.Horizontal);
+            current.Dispose();
+            current = flipped.Copy();
+        }
+
+        if (grayscale)
+        {
+            using var gray = current.Colourspace(Enums.Interpretation.Bw);
+            current.Dispose();
+            current = gray.Bandjoin([gray, gray]).Copy();
+        }
+
+        return EnsureRgb(current);
+    }
+
+    public static NetVips.Image? ProcessImageForCell(
+        SourceImageCache cache,
+        string path,
+        int targetWidth,
+        int targetHeight,
+        LayoutOrientation requiredOrientation,
+        double panX,
+        double panY,
+        bool flipH,
+        bool grayscale)
+    {
+        if (!OrientationHelper.MatchesOrientation(path, requiredOrientation))
+        {
+            return null;
+        }
+
+        using var loaded = LoadForCell(cache, path, targetWidth, targetHeight);
+        using var covered = CoverResizePanned(loaded, targetWidth, targetHeight, panX, panY);
+        return ApplyTransforms(covered, flipH, grayscale);
+    }
+
+    public static NetVips.Image LoadForPreview(string path, int targetWidth, int targetHeight)
+    {
+        // Shrink-on-load for stage preview — large enough to preserve pan headroom, far below export decode.
+        int thumbSize = Math.Clamp(Math.Max(targetWidth, targetHeight) * 3, 256, 1600);
+        return NetVips.Image.Thumbnail(path, thumbSize, size: Enums.Size.Down).Autorot();
+    }
+
+    public static NetVips.Image? ProcessImageForPreviewCell(
+        string path,
+        int targetWidth,
+        int targetHeight,
+        LayoutOrientation requiredOrientation,
+        double panX,
+        double panY,
+        bool flipH,
+        bool grayscale)
+    {
+        if (!OrientationHelper.MatchesOrientation(path, requiredOrientation))
+        {
+            return null;
+        }
+
+        using var loaded = LoadForPreview(path, targetWidth, targetHeight);
+        using var covered = CoverResizePanned(loaded, targetWidth, targetHeight, panX, panY);
+        return ApplyTransforms(covered, flipH, grayscale);
+    }
+}

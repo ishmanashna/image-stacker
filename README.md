@@ -1,56 +1,49 @@
 # Image Stacker
 
-Desktop and CLI tool for Instagram-style **layout collages** (stack, grid, combo pack, manual slot editing).
+Windows desktop and CLI tool for Instagram-style **layout collages** (stack, grid, combo pack, manual slot editing).
 
-Exports portrait collages at **3840×4800** with JPEG output capped at **8 MB** (Instagram upload limit). This repo is the stacker-only product split from a legacy monolith; it does **not** include carousel strip export.
+Exports portrait collages at **3840×4800** with JPEG output capped at **8 MB** (Instagram upload limit). Built with **.NET 8**, **WPF**, and **libvips** (NetVips).
 
 ## Requirements
 
-- **Python 3.10+**
-- **Pillow** (`pip install -r requirements.txt`)
-- **tkinter** for the GUI (included with the standard Windows/macOS Python installers; on many Linux distros install `python3-tk`)
+- **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)** (build and run from source)
+- **Windows 10+** for the WPF desktop app (`ImageStacker.App`)
+- The CLI (`ImageStacker.Cli`) targets **win-x64** and bundles native libvips when published self-contained
 
 ## Quick start
 
-**Windows (PowerShell):**
+From the repository root:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-python run_gui.py
+# Desktop app (WPF)
+dotnet run --project src/ImageStacker.App
+
+# CLI (help)
+dotnet run --project src/ImageStacker.Cli -- --help
 ```
 
-**macOS / Linux:**
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python run_gui.py
-```
-
-Point the GUI at any folder of `.jpg` / `.jpeg` / `.png` images, pick a layout, and export.
+Point the app at a folder of `.jpg` / `.jpeg` / `.png` images, pick a layout, and export.
 
 ### Entry points
 
 | What | Command |
 |------|---------|
-| GUI (dev) | `python run_gui.py` or `python -m app.gui.main` |
-| CLI | `python script.py …` or `python -m app.cli …` |
-| Perf harness | `python -m app.perf` (writes `perf_reports/`) |
+| GUI (dev) | `dotnet run --project src/ImageStacker.App` |
+| CLI | `dotnet run --project src/ImageStacker.Cli -- <folder> --output <dir> [options]` |
+| Tests | `dotnet test src/ImageStacker.Tests -c Release` |
 
 ## CLI
 
 ```powershell
-python script.py <folder> [options]
+dotnet run --project src/ImageStacker.Cli -- <folder> --output <dir> [options]
 ```
 
 **Examples:**
 
 ```powershell
-python script.py .\photos --layout stack-3 --count 2 --output output
-python script.py .\photos --combo --output output
-python script.py .\photos --layout grid-2x4 --batch --borderless --bleed --color beige --output output
+dotnet run --project src/ImageStacker.Cli -- .\photos --layout stack-3 --count 2 --output output
+dotnet run --project src/ImageStacker.Cli -- .\photos --combo --output output
+dotnet run --project src/ImageStacker.Cli -- .\photos --layout grid-2x4 --batch --borderless --bleed --color beige --output output
 ```
 
 **Layouts** (`--layout`):
@@ -70,63 +63,69 @@ python script.py .\photos --layout grid-2x4 --batch --borderless --bleed --color
 | Flag | Description |
 |------|-------------|
 | `--combo` | Standard set: 10× grid-2x4 (NB), 10× stack-3 (NB), 10× grid-2x2-v framed, 10× grid-2x2-v borderless |
-| `--count N` | Number of collages to generate (default `1`) |
-| `--batch` | Use all available images in combinations |
+| `--count N` | Number of collages for `--random` (default `1`) |
+| `--batch` | Use all available images in non-overlapping groups |
 | `--random` | Shuffle image order |
-| `--output DIR` | Output folder (default `output`) |
+| `--output DIR` | Output folder (required) |
 | `--borderless` | Remove borders / frames |
 | `--bleed` | Top row edge-to-edge (editorial style) |
 | `--color NAME\|#HEX` | Background color (default `white`) |
 
-Run `python script.py --help` for the full list.
+Run with `--help` for the full list.
 
 ## Tests
 
-Smoke tests export one collage per layout. They use a local `TEST IMAGES/` folder if present; otherwise they generate temporary synthetic images (no fixture photos are required in the repo).
-
 ```powershell
-.venv\Scripts\python.exe -m unittest tests.test_layout_smoke -v
+dotnet test src/ImageStacker.Tests -c Release
 ```
 
-```bash
-python -m unittest tests.test_layout_smoke -v
-```
+Tests use a local `TEST IMAGES/` folder when present; otherwise they generate temporary synthetic images (no fixture photos are required in the repo).
 
-Regression baseline hashes live in `docs/BASELINE_HASHES.txt` (regenerate with `scripts/generate_baseline_hashes.py` when you have a local `TEST IMAGES/` folder).
+## Settings and logs
 
-## Logs and performance
+On Windows, the desktop app stores:
 
-- **GUI logs:** `%LOCALAPPDATA%\ImageStacker\logs\app.log` on Windows; `~/ImageStacker/logs/app.log` elsewhere (`LOCALAPPDATA` if set, otherwise your home directory).
-- **Perf tracing:** set `IMAGE_STACKER_PERF=1` or pass `--perf` / `--perf-out DIR` to the GUI entry.
+- **Settings:** `%LOCALAPPDATA%\ImageStacker\settings.json`
+- **Logs:** `%LOCALAPPDATA%\ImageStacker\logs\app.log`
 
 ## Project layout
 
 ```
-app/
-  cli.py              # CLI implementation
-  engine/             # Layout engine and batch jobs
-  gui/                # Tkinter desktop UI
-  io.py               # Image I/O, colors, JPEG save
-  preview.py          # Preview rendering
-  perf/               # Optional performance harness
-run_gui.py            # GUI launcher
-script.py             # CLI shim
-tests/                # Smoke tests
-docs/                 # Baseline hashes
-scripts/              # Dev utilities
+src/
+  ImageStacker.Core/    # Layout engine, export, preview
+  ImageStacker.Cli/     # Command-line export
+  ImageStacker.App/     # WPF desktop UI
+  ImageStacker.Tests/   # xUnit tests
+docs/
+  DESKTOP_RESTACK_PLAN.md
 ```
 
-## Build (optional)
+## Publish (self-contained win-x64)
 
-Windows one-file executable via PyInstaller (not required for normal use):
+Publish outputs go to `dist/` (gitignored). Native libvips DLLs (`libvips-42.dll`, `NetVips.dll`) are copied next to the executable.
+
+**App:**
 
 ```powershell
-pip install -r requirements-dev.txt
-.\build_windows.ps1
+dotnet publish src/ImageStacker.App -c Release -r win-x64 --self-contained true -o dist/app
 ```
 
-Produces `dist\ImageStacker.exe`. Alternatively: `pyinstaller ImageStacker.spec`.
+**CLI:**
+
+```powershell
+dotnet publish src/ImageStacker.Cli -c Release -r win-x64 --self-contained true -o dist/cli
+```
+
+**Both (PowerShell helper):**
+
+```powershell
+.\scripts\publish.ps1
+```
+
+Published builds include `THIRD_PARTY_NOTICES.txt` with libvips LGPL attribution.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Third-party native dependency: [libvips](https://www.libvips.org/) (LGPL). See `THIRD_PARTY_NOTICES.txt` in published `dist/` output.

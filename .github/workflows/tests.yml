@@ -7,23 +7,43 @@ on:
     branches: [main, master]
 
 jobs:
-  smoke:
-    runs-on: ubuntu-latest
+  test-and-publish-smoke:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-dotnet@v4
         with:
-          python-version: "3.12"
+          dotnet-version: "8.0.x"
 
-      - name: Install tkinter (GUI import smoke)
-        run: sudo apt-get update && sudo apt-get install -y python3-tk
+      - name: Restore solution
+        run: dotnet restore src/ImageStacker.sln
+        shell: pwsh
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Run tests
+        run: dotnet test src/ImageStacker.Tests -c Release --no-restore
+        shell: pwsh
 
-      - name: Layout smoke tests
-        run: python -m unittest tests.test_layout_smoke -v
+      - name: Publish CLI smoke (self-contained win-x64)
+        run: dotnet publish src/ImageStacker.Cli -c Release -r win-x64 --self-contained true -o dist/ci-cli
+        shell: pwsh
 
-      - name: Verify GUI module imports
-        run: python -c "from app.gui.main import main; print('GUI import OK')"
+      - name: Assert native vips DLLs in CLI publish output
+        run: |
+          $dlls = Get-ChildItem -Path dist/ci-cli -Filter "*.dll" | Select-Object -ExpandProperty Name
+          if (-not ($dlls -match 'NetVips\.dll')) { throw "NetVips.dll not found in publish output" }
+          if (-not ($dlls -match 'libvips')) { throw "libvips native DLL not found in publish output" }
+          Write-Host "Native vips DLLs present: $($dlls -join ', ')"
+        shell: pwsh
+
+      - name: Publish App smoke (self-contained win-x64)
+        run: dotnet publish src/ImageStacker.App -c Release -r win-x64 --self-contained true -o dist/ci-app
+        shell: pwsh
+
+      - name: Assert native vips DLLs in App publish output
+        run: |
+          $dlls = Get-ChildItem -Path dist/ci-app -Filter "*.dll" | Select-Object -ExpandProperty Name
+          if (-not ($dlls -match 'NetVips\.dll')) { throw "NetVips.dll not found in App publish output" }
+          if (-not ($dlls -match 'libvips')) { throw "libvips native DLL not found in App publish output" }
+          Write-Host "App native vips DLLs present: $($dlls -join ', ')"
+        shell: pwsh
