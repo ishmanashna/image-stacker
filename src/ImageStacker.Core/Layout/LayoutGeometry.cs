@@ -12,6 +12,9 @@ public sealed record LayoutGeometry(
 
 public static class LayoutGeometryCalculator
 {
+    /// <summary>How far neighboring cells grow into each other along a shared seam when bleed is on.</summary>
+    public const int BleedOverlapPx = 48;
+
     public static LayoutGeometry Compute(string layoutName, bool borderless, bool bleed = false)
     {
         var config = LayoutCatalog.GetRequired(layoutName);
@@ -37,35 +40,79 @@ public static class LayoutGeometryCalculator
         }
 
         int totalSpacingH = (spacing * (rows - 1)) + (margin * 2);
-        int targetH = (Constants.CanvasHeight - totalSpacingH) / rows;
+        int availableH = Constants.CanvasHeight - totalSpacingH;
+        int targetH = availableH / rows;
+        int remH = availableH % rows;
         int totalSpacingW = (spacing * (cols - 1)) + (margin * 2);
-        int targetWNormal = (Constants.CanvasWidth - totalSpacingW) / cols;
+        int availableW = Constants.CanvasWidth - totalSpacingW;
+        int targetW = availableW / cols;
+        int remW = availableW % cols;
 
-        bool useBleed = bleed && !borderless && rows >= 1 && cols >= 1;
-        int targetWBleedRow = useBleed ? Constants.CanvasWidth / cols : targetWNormal;
+        var positions = new List<CellRect>(rows * cols);
+        var cellSizes = new List<CellRect>(rows * cols);
 
-        var positions = new List<CellRect>();
-        var cellSizes = new List<CellRect>();
-
+        int y = margin;
         for (int r = 0; r < rows; r++)
         {
-            if (useBleed && r == 0)
+            int h = targetH + (r == rows - 1 ? remH : 0);
+            int x = margin;
+            for (int c = 0; c < cols; c++)
             {
-                int tw = targetWBleedRow;
-                for (int c = 0; c < cols; c++)
-                {
-                    positions.Add(new CellRect(c * tw, margin + r * (targetH + spacing), tw, targetH));
-                    cellSizes.Add(new CellRect(0, 0, tw, targetH));
-                }
+                int tw = targetW + (c == cols - 1 ? remW : 0);
+                positions.Add(new CellRect(x, y, tw, h));
+                cellSizes.Add(new CellRect(0, 0, tw, h));
+                x += tw + spacing;
             }
-            else
+
+            y += h + spacing;
+        }
+
+        // Bleed softens seams: grow through the gutter so neighbors actually overlap.
+        // Grow each internal edge by half the gutter plus half the overlap budget.
+        bool useBleed = bleed && !borderless && spacing > 0 && BleedOverlapPx > 0 && (rows > 1 || cols > 1);
+        if (useBleed)
+        {
+            int grow = (spacing / 2) + (BleedOverlapPx / 2);
+            for (int r = 0; r < rows; r++)
             {
                 for (int c = 0; c < cols; c++)
                 {
-                    int x = margin + c * (targetWNormal + spacing);
-                    int y = margin + r * (targetH + spacing);
-                    positions.Add(new CellRect(x, y, targetWNormal, targetH));
-                    cellSizes.Add(new CellRect(0, 0, targetWNormal, targetH));
+                    int i = (r * cols) + c;
+                    CellRect cell = positions[i];
+                    int x0 = cell.X;
+                    int y0 = cell.Y;
+                    int x1 = cell.X + cell.Width;
+                    int y1 = cell.Y + cell.Height;
+
+                    if (c > 0)
+                    {
+                        x0 -= grow;
+                    }
+
+                    if (c < cols - 1)
+                    {
+                        x1 += grow;
+                    }
+
+                    if (r > 0)
+                    {
+                        y0 -= grow;
+                    }
+
+                    if (r < rows - 1)
+                    {
+                        y1 += grow;
+                    }
+
+                    x0 = Math.Max(0, x0);
+                    y0 = Math.Max(0, y0);
+                    x1 = Math.Min(Constants.CanvasWidth, x1);
+                    y1 = Math.Min(Constants.CanvasHeight, y1);
+
+                    int w = Math.Max(1, x1 - x0);
+                    int hCell = Math.Max(1, y1 - y0);
+                    positions[i] = new CellRect(x0, y0, w, hCell);
+                    cellSizes[i] = new CellRect(0, 0, w, hCell);
                 }
             }
         }
@@ -73,7 +120,7 @@ public static class LayoutGeometryCalculator
         return new LayoutGeometry(
             config.NumImages,
             config.Orientation,
-            targetWNormal,
+            targetW,
             targetH,
             positions,
             cellSizes);

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 
 namespace ImageStacker.App.Services;
 
@@ -11,10 +11,41 @@ internal static class FileLogger
     {
         lock (Gate)
         {
-            _writer?.Dispose();
-            _writer = new StreamWriter(AppPaths.LogFile, append: true) { AutoFlush = true };
-            _writer.WriteLine($"--- session {DateTime.Now:yyyy-MM-dd HH:mm:ss} ---");
+            try
+            {
+                _writer?.Dispose();
+                _writer = null;
+                _writer = OpenWriter(AppPaths.LogFile);
+                _writer.WriteLine($"--- session {DateTime.Now:yyyy-MM-dd HH:mm:ss} pid={Environment.ProcessId} ---");
+            }
+            catch (Exception ex)
+            {
+                // Never let logging take down the app. Fall back to a pid-scoped file, then to null.
+                try
+                {
+                    string fallback = Path.Combine(
+                        AppPaths.LogDir,
+                        $"app-{Environment.ProcessId}.log");
+                    _writer = OpenWriter(fallback);
+                    _writer.WriteLine($"--- session {DateTime.Now:yyyy-MM-dd HH:mm:ss} pid={Environment.ProcessId} (fallback) ---");
+                    _writer.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [WARN] Primary log unavailable: {ex.Message}");
+                }
+                catch
+                {
+                    _writer = null;
+                }
+            }
         }
+    }
+
+    private static StreamWriter OpenWriter(string path)
+    {
+        var stream = new FileStream(
+            path,
+            FileMode.Append,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+        return new StreamWriter(stream) { AutoFlush = true };
     }
 
     public static void Info(string message) => Write("INFO", message);
@@ -32,7 +63,14 @@ internal static class FileLogger
         string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}";
         lock (Gate)
         {
-            _writer?.WriteLine(line);
+            try
+            {
+                _writer?.WriteLine(line);
+            }
+            catch
+            {
+                // Swallow write failures; logging must never crash the UI.
+            }
         }
     }
 }

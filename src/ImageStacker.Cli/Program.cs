@@ -157,7 +157,7 @@ internal static class Program
               --color <name|#RRGGBB>    Background color (default: white)
 
             Layouts:
-              stack-2, stack-3, grid-1x2-v, grid-1x3-m, grid-2x4, grid-3x3, grid-2x2-v
+              stack-2, stack-3, stack-4, grid-1x2-v, grid-1x3-h, grid-1x3-v, grid-2x4, grid-3x3, grid-2x2-v, grid-2x2-h
 
             Examples:
               dotnet run --project src/ImageStacker.Cli -- "C:\photos" --layout stack-3 --output "C:\out"

@@ -7,7 +7,9 @@ public sealed record ExportJob(
     IReadOnlyList<string> Paths,
     string LayoutName,
     bool Borderless,
-    int JobIndex);
+    int JobIndex,
+    IReadOnlyList<SlotAssignment>? Slots = null,
+    string? OutputPath = null);
 
 public sealed record ExportJobResult(int Succeeded, int Failed, int Total);
 
@@ -47,7 +49,7 @@ public static class ExportJobRunner
                 {
                     try
                     {
-                        string outputPath = CollageExporter.GenerateOutputFilename(
+                        string outputPath = job.OutputPath ?? CollageExporter.GenerateOutputFilename(
                             outputDir,
                             job.LayoutName,
                             job.JobIndex);
@@ -59,7 +61,7 @@ public static class ExportJobRunner
                             color,
                             outputPath,
                             bleed,
-                            slots: null,
+                            job.Slots,
                             cache);
 
                         Interlocked.Increment(ref succeeded);

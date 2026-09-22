@@ -11,7 +11,6 @@ using ImageStacker.Core.Export;
 using ImageStacker.Core.Imaging;
 using ImageStacker.Core.Jobs;
 using ImageStacker.Core.Layout;
-using ImageStacker.Core.Io;
 using Microsoft.Win32;
 
 namespace ImageStacker.App;
@@ -26,12 +25,13 @@ public partial class MainWindow : Window
     private readonly ManualUndoStack _manualUndo = new();
     private readonly Dictionary<string, Button> _layoutButtons = new(StringComparer.OrdinalIgnoreCase);
     private bool _busy;
-    private bool _suppressUiEvents;
+    private bool _suppressUiEvents = true; // true until ctor finishes (XAML Checked/TextChanged fire early)
+    private bool _uiReady;
     private string? _lastRunOutputDir;
 
-    private List<SlotAssignment?> _manualSlots = [];
-    private string _manualLayout = "stack-3";
-    private bool _manualBorderless;
+    private EditableCollage _manualCollage = EditableCollage.Blank("stack-3", false);
+    private List<EditableCollage> _standaloneCollages = [];
+    private List<ManualUndoStack> _standaloneUndos = [];
 
     private string? _thumbDragPath;
     private Point _thumbDragStart;
@@ -54,6 +54,7 @@ public partial class MainWindow : Window
         _thumbnailLoader.ThumbnailsUpdated += OnThumbnailsUpdated;
         _previewStage = new PreviewStageService(Dispatcher);
         _previewStage.StageUpdated += OnPreviewStageUpdated;
+        _previewStage.FocusIndexChanged += OnPreviewFocusIndexChanged;
         _deckService = new DeckService(Dispatcher);
         _deckService.FocusIndexChanged += OnDeckFocusIndexChanged;
         _deckService.SelectionChanged += OnDeckSelectionChanged;
@@ -61,7 +62,9 @@ public partial class MainWindow : Window
         BuildLayoutCards();
         BuildColorCombo();
         LoadSettingsIntoUi();
-        EnsureManualSlotsForLayout(SelectedLayout);
+        EnsureManualCollageForLayout(SelectedLayout);
+        _uiReady = true;
+        _suppressUiEvents = false;
         UpdateModeUi();
         UpdateRunEstimate();
         ReloadThumbnails();
@@ -162,12 +165,39 @@ public partial class MainWindow : Window
         }
     }
 
-    private string SelectedMode =>
-        ModeBatch.IsChecked == true ? "batch" :
-        ModeRandom.IsChecked == true ? "random" :
-        ModeCombo.IsChecked == true ? "combo" :
-        ModeManual.IsChecked == true ? "manual" :
-        "single";
+    private string SelectedMode
+    {
+        get
+        {
+            // During InitializeComponent, Checked handlers can fire before all radio fields exist.
+            if (ModeBatch is null || ModeRandom is null || ModeCombo is null || ModeManual is null)
+            {
+                return "single";
+            }
+
+            if (ModeBatch.IsChecked == true)
+            {
+                return "batch";
+            }
+
+            if (ModeRandom.IsChecked == true)
+            {
+                return "random";
+            }
+
+            if (ModeCombo.IsChecked == true)
+            {
+                return "combo";
+            }
+
+            if (ModeManual.IsChecked == true)
+            {
+                return "manual";
+            }
+
+            return "single";
+        }
+    }
 
     private void SetMode(string mode)
     {
@@ -181,9 +211,9 @@ public partial class MainWindow : Window
 
         if (mode == "manual")
         {
-            _manualLayout = SelectedLayout;
-            _manualBorderless = BorderlessCheck.IsChecked == true;
-            EnsureManualSlotsForLayout(_manualLayout);
+            _manualCollage.Layout = SelectedLayout;
+            _manualCollage.Borderless = BorderlessCheck.IsChecked == true;
+            EnsureManualCollageForLayout(_manualCollage.Layout);
         }
 
         UpdateModeUi();
@@ -235,8 +265,7 @@ public partial class MainWindow : Window
         BleedCheck.IsChecked = settings.Bleed;
         SelectColorInCombo(settings.Color);
 
-        _manualLayout = settings.Layout;
-        _manualBorderless = settings.Borderless;
+        _manualCollage = EditableCollage.Blank(settings.Layout, settings.Borderless);
 
         _suppressUiEvents = false;
         UpdateModeUi();
@@ -370,9 +399,9 @@ public partial class MainWindow : Window
             HighlightLayoutCard(layout);
             if (SelectedMode == "manual")
             {
-                _manualLayout = layout;
-                _manualBorderless = BorderlessCheck.IsChecked == true;
-                ResetManualSlotsForLayout(layout);
+                _manualCollage.Layout = layout;
+                _manualCollage.Borderless = BorderlessCheck.IsChecked == true;
+                ResetManualCollageForLayout(layout);
             }
 
             UpdateRunEstimate();
@@ -382,16 +411,17 @@ public partial class MainWindow : Window
 
     private void Mode_Changed(object sender, RoutedEventArgs e)
     {
-        if (_suppressUiEvents || _busy)
+        // Checked fires while XAML is still wiring controls; wait until ctor finishes.
+        if (!_uiReady || _suppressUiEvents || _busy)
         {
             return;
         }
 
         if (SelectedMode == "manual")
         {
-            _manualLayout = SelectedLayout;
-            _manualBorderless = BorderlessCheck.IsChecked == true;
-            EnsureManualSlotsForLayout(_manualLayout);
+            _manualCollage.Layout = SelectedLayout;
+            _manualCollage.Borderless = BorderlessCheck.IsChecked == true;
+            EnsureManualCollageForLayout(_manualCollage.Layout);
         }
 
         UpdateModeUi();
@@ -426,6 +456,7 @@ public partial class MainWindow : Window
         DeckSelectNoneButton.IsEnabled = enableEditing;
 
         BorderlessCheck.IsEnabled = enableEditing && !combo;
+        BleedCheck.IsEnabled = enableEditing && !combo && BorderlessCheck.IsChecked != true;
         CountBox.IsEnabled = enableEditing && mode is "single" or "random";
 
         PreviewPrevButton.IsEnabled = enableEditing && !manual;
@@ -433,22 +464,22 @@ public partial class MainWindow : Window
 
         if (manual)
         {
-            int filled = _manualSlots.Count(s => s is not null);
-            int required = LayoutCatalog.GetRequired(_manualLayout).NumImages;
+            int filled = _manualCollage.Slots.Count(s => s is not null);
+            int required = _manualCollage.Slots.Count;
             if (filled > 0)
             {
                 StatusText.Text =
-                    $"Manual: {filled}/{required} slots filled. Drag/click thumbs; pan, flip, swap, clear; Ctrl+Z/Y undo.";
+                    $"Blank collage: {filled}/{required} slots filled. Drag/click thumbs; pan, flip, swap, clear; Ctrl+Z/Y undo.";
             }
             else
             {
                 StatusText.Text =
-                    "Manual: drag or click thumbnails to fill slots; pan, flip, swap, clear; Ctrl+Z/Y undo.";
+                    "Blank collage: drag or click thumbnails to fill slots; pan, flip, swap, clear; Ctrl+Z/Y undo.";
             }
         }
-        else
+        else if (GetFocusedCollage() is not null)
         {
-            StatusText.Text = "Ready.";
+            StatusText.Text = "Edit on stage: assign, pan, flip, swap, clear; Ctrl+Z/Y undo.";
         }
     }
 
@@ -465,14 +496,14 @@ public partial class MainWindow : Window
 
     private void Option_Changed(object sender, RoutedEventArgs e)
     {
-        if (_suppressUiEvents)
+        if (!_uiReady || _suppressUiEvents)
         {
             return;
         }
 
         if (SelectedMode == "manual")
         {
-            _manualBorderless = BorderlessCheck.IsChecked == true;
+            _manualCollage.Borderless = BorderlessCheck.IsChecked == true;
         }
 
         UpdateRunEstimate();
@@ -526,21 +557,21 @@ public partial class MainWindow : Window
     {
         string input = InputFolderBox.Text.Trim();
         string mode = SelectedMode;
-        string layout = mode == "manual" ? _manualLayout : SelectedLayout;
+        string layout = mode == "manual" ? _manualCollage.Layout : SelectedLayout;
         int count = SelectedCount;
-        bool borderless = mode == "manual" ? _manualBorderless : BorderlessCheck.IsChecked == true;
+        bool borderless = mode == "manual" ? _manualCollage.Borderless : BorderlessCheck.IsChecked == true;
 
         if (mode == "manual")
         {
-            int required = LayoutCatalog.GetRequired(_manualLayout).NumImages;
-            int filled = _manualSlots.Count(s => s is not null);
+            int required = _manualCollage.Slots.Count;
+            int filled = _manualCollage.Slots.Count(s => s is not null);
             if (filled < required)
             {
-                RunInfoText.Text = $"Manual: fill all {required} slots to export ({filled}/{required} filled).";
+                RunInfoText.Text = $"Blank collage: fill all {required} slots to export ({filled}/{required} filled).";
             }
             else
             {
-                RunInfoText.Text = "Manual: will write 1 JPEG with current slot crops and transforms.";
+                RunInfoText.Text = "Blank collage: Run writes one JPEG with current slot crops and transforms.";
             }
 
             return;
@@ -563,7 +594,7 @@ public partial class MainWindow : Window
                 _ => "combo pack",
             };
             RunInfoText.Text =
-                $"Deck: {expected} card(s) — {selected} ticked. Run writes ticked only ({modeLabel}).";
+                $"Deck: {expected} card(s) — {selected} ticked. Run asks export current or all ticked ({modeLabel}).";
             return;
         }
 
@@ -593,26 +624,70 @@ public partial class MainWindow : Window
         string input = InputFolderBox.Text.Trim();
         string output = OutputFolderBox.Text.Trim();
         string mode = SelectedMode;
-        string layout = SelectedMode == "manual" ? _manualLayout : SelectedLayout;
+        string layout = SelectedMode == "manual" ? _manualCollage.Layout : SelectedLayout;
         int count = SelectedCount;
-        bool borderless = SelectedMode == "manual" ? _manualBorderless : BorderlessCheck.IsChecked == true;
+        bool borderless = SelectedMode == "manual" ? _manualCollage.Borderless : BorderlessCheck.IsChecked == true;
         bool bleed = BleedCheck.IsChecked == true;
         string color = SelectedColor;
 
-        string? validationError = ExportService.ValidateRun(
-            input,
-            output,
-            mode,
-            layout,
-            count,
-            borderless,
-            mode == "manual" ? _manualSlots : null,
-            mode == "manual" ? _manualLayout : null);
+        string? validationError = ExportService.ValidateRun(input, output, mode, layout, count, borderless);
         if (validationError is not null)
         {
             MessageBox.Show(validationError, "Cannot run", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
+
+        bool useDeck = mode != "manual"
+            && DeckService.ShouldShowDeck(mode, ExportService.EstimateOutputCount(input, mode, layout, count, borderless));
+
+        ExportChoice exportChoice = ExportChoice.Current;
+        if (useDeck)
+        {
+            var choiceDialog = new ExportChoiceDialog(_deckService.SelectedCount) { Owner = this };
+            if (choiceDialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            exportChoice = choiceDialog.Choice;
+
+            if (exportChoice == ExportChoice.All && _deckService.SelectedCount == 0)
+            {
+                MessageBoxResult selectAll = MessageBox.Show(
+                    "No cards are ticked. Select all cards and export?",
+                    "Export all",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+                if (selectAll != MessageBoxResult.Yes)
+                {
+                    return;
+                }
+
+                _deckService.SelectAll();
+            }
+        }
+
+        string outputFull = IOPath.GetFullPath(output);
+        IReadOnlyList<(ExportJob Job, EditableCollage Collage, string? ValidationContext)> exportTargets =
+            BuildExportTargets(input, mode, layout, count, borderless, outputFull, exportChoice);
+
+        foreach ((ExportJob _, EditableCollage collage, string? validationContext) in exportTargets)
+        {
+            string? collageError = ExportService.ValidateCollage(collage, validationContext);
+            if (collageError is not null)
+            {
+                MessageBox.Show(collageError, "Cannot run", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+        }
+
+        if (exportTargets.Count == 0)
+        {
+            MessageBox.Show("Nothing to export.", "Cannot run", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        IReadOnlyList<ExportJob> jobs = exportTargets.Select(t => t.Job).ToList();
 
         _busy = true;
         UpdateModeUi();
@@ -620,11 +695,10 @@ public partial class MainWindow : Window
         OpenOutputButton.IsEnabled = false;
         PreviewPrevButton.IsEnabled = false;
         PreviewNextButton.IsEnabled = false;
-        UseManualButton.IsEnabled = false;
         _lastRunOutputDir = null;
 
         RunProgress.Visibility = Visibility.Visible;
-        RunProgress.Maximum = 1;
+        RunProgress.Maximum = jobs.Count;
         RunProgress.Value = 0;
         StatusText.Text = "Working…";
         RunWorkingText.Text = "Processing…";
@@ -633,111 +707,52 @@ public partial class MainWindow : Window
 
         try
         {
-            string outputFull = IOPath.GetFullPath(output);
             Directory.CreateDirectory(outputFull);
 
-            if (mode == "manual")
+            if (jobs.Count > 1)
             {
-                string outputPath = CollageExporter.GenerateManualOutputFilename(outputFull);
-                var paths = _manualSlots.Select(s => s!.Path).ToList();
-                var slots = _manualSlots.Select(s => s!).ToList();
+                int lo = Math.Max(2, (int)(jobs.Count * 0.2));
+                int hi = Math.Max(lo + 4, (int)(jobs.Count * 0.9));
+                RunWorkingText.Text =
+                    $"Processing… about {lo}–{hi}s for ~{jobs.Count} file(s) (varies with CPU & photos).";
+            }
 
-                await Task.Run(() =>
-                {
-                    using var cache = new SourceImageCache();
-                    CollageExporter.ExportCollage(
-                        paths,
-                        _manualLayout,
-                        _manualBorderless,
-                        color,
-                        outputPath,
-                        bleed,
-                        slots,
-                        cache);
-                }).ConfigureAwait(true);
+            int completed = 0;
+            ExportJobResult result = await Task.Run(() =>
+                ExportJobRunner.RunJobs(
+                    jobs,
+                    outputFull,
+                    color,
+                    bleed,
+                    onSuccess: _ =>
+                    {
+                        int done = Interlocked.Increment(ref completed);
+                        Dispatcher.Invoke(() => RunProgress.Value = done);
+                    },
+                    onFailure: (index, message) =>
+                        FileLogger.Warning($"Job {index:000} failed: {message}")),
+                CancellationToken.None).ConfigureAwait(true);
 
-                RunProgress.Value = 1;
-                stopwatch.Stop();
-                StatusText.Text = $"Finished in {stopwatch.Elapsed.TotalSeconds:F1}s. Check output folder.";
-                _lastRunOutputDir = outputFull;
-                OpenOutputButton.IsEnabled = true;
-                FileLogger.Info($"Manual export complete: {outputPath}");
+            stopwatch.Stop();
+            if (result.Failed > 0)
+            {
+                StatusText.Text =
+                    $"Finished in {stopwatch.Elapsed.TotalSeconds:F1}s — {result.Succeeded}/{result.Total} succeeded.";
             }
             else
             {
-                IReadOnlyList<ExportJob> allJobs = ExportService.BuildJobs(input, mode, layout, count, borderless);
-                bool useDeck = DeckService.ShouldShowDeck(mode, allJobs.Count);
-                IReadOnlyList<ExportJob> jobs;
-
-                if (useDeck)
-                {
-                    var tickedIndices = _deckService.Cards
-                        .Where(c => c.IsSelected)
-                        .Select(c => c.DeckIndex)
-                        .ToHashSet();
-
-                    if (tickedIndices.Count == 0)
-                    {
-                        stopwatch.Stop();
-                        StatusText.Text = "No cards ticked — select cards in the deck, then Run.";
-                        RunWorkingText.Text = string.Empty;
-                        return;
-                    }
-
-                    jobs = allJobs.Where(j => tickedIndices.Contains(j.JobIndex)).ToList();
-                }
-                else
-                {
-                    jobs = allJobs;
-                }
-
-                RunProgress.Maximum = jobs.Count;
-
-                if (jobs.Count > 1 || mode is "batch" or "combo" or "random")
-                {
-                    int lo = Math.Max(2, (int)(jobs.Count * 0.2));
-                    int hi = Math.Max(lo + 4, (int)(jobs.Count * 0.9));
-                    RunWorkingText.Text =
-                        $"Processing… about {lo}–{hi}s for ~{jobs.Count} file(s) (varies with CPU & photos).";
-                }
-
-                int completed = 0;
-                ExportJobResult result = await Task.Run(() =>
-                    ExportJobRunner.RunJobs(
-                        jobs,
-                        outputFull,
-                        color,
-                        bleed,
-                        onSuccess: _ =>
-                        {
-                            int done = Interlocked.Increment(ref completed);
-                            Dispatcher.Invoke(() => RunProgress.Value = done);
-                        },
-                        onFailure: (index, message) =>
-                            FileLogger.Warning($"Job {index:000} failed: {message}")),
-                    CancellationToken.None).ConfigureAwait(true);
-
-                stopwatch.Stop();
-                if (result.Failed > 0)
-                {
-                    StatusText.Text =
-                        $"Finished in {stopwatch.Elapsed.TotalSeconds:F1}s — {result.Succeeded}/{result.Total} succeeded.";
-                }
-                else
-                {
-                    StatusText.Text =
-                        $"Finished in {stopwatch.Elapsed.TotalSeconds:F1}s. Check output folder.";
-                }
-
-                if (result.Succeeded > 0)
-                {
-                    _lastRunOutputDir = outputFull;
-                    OpenOutputButton.IsEnabled = true;
-                }
-
-                FileLogger.Info(
-                    $"Run complete: {result.Succeeded}/{result.Total} succeeded, {result.Failed} failed.");
+                StatusText.Text =
+                    $"Finished in {stopwatch.Elapsed.TotalSeconds:F1}s. Check output folder.";
             }
+
+            if (result.Succeeded > 0)
+            {
+                _lastRunOutputDir = outputFull;
+                OpenOutputButton.IsEnabled = true;
+            }
+
+            FileLogger.Info(
+                $"Run complete: {result.Succeeded}/{result.Total} succeeded, {result.Failed} failed.");
         }
         catch (Exception ex)
         {
@@ -759,6 +774,61 @@ public partial class MainWindow : Window
             UpdateModeUi();
             SchedulePreviewRefresh();
         }
+    }
+
+    private IReadOnlyList<(ExportJob Job, EditableCollage Collage, string? ValidationContext)> BuildExportTargets(
+        string input,
+        string mode,
+        string layout,
+        int count,
+        bool borderless,
+        string outputFull,
+        ExportChoice exportChoice)
+    {
+        if (mode == "manual")
+        {
+            string outputPath = CollageExporter.GenerateManualOutputFilename(outputFull);
+            return [(
+                ExportService.BuildExportJobFromCollage(_manualCollage, jobIndex: 1, outputPath),
+                _manualCollage,
+                null)];
+        }
+
+        IReadOnlyList<ExportJob> allJobs = ExportService.BuildJobs(input, mode, layout, count, borderless);
+        bool useDeck = DeckService.ShouldShowDeck(mode, allJobs.Count);
+
+        if (useDeck)
+        {
+            if (exportChoice == ExportChoice.Current)
+            {
+                DeckCardItem card = _deckService.Cards[_deckService.FocusIndex];
+                return [(
+                    ExportService.BuildExportJobFromCollage(card.Collage, card.DeckIndex),
+                    card.Collage,
+                    $"Card {card.DeckIndex}")];
+            }
+
+            return _deckService.Cards
+                .Where(c => c.IsSelected)
+                .Select(c => (
+                    ExportService.BuildExportJobFromCollage(c.Collage, c.DeckIndex),
+                    c.Collage,
+                    (string?)$"Card {c.DeckIndex}"))
+                .ToList();
+        }
+
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
+        {
+            return Array.Empty<(ExportJob, EditableCollage, string?)>();
+        }
+
+        int focusIndex = Math.Clamp(_previewStage.FocusIndex, 0, Math.Max(0, allJobs.Count - 1));
+        ExportJob template = allJobs[focusIndex];
+        return [(
+            ExportService.BuildExportJobFromCollage(collage, template.JobIndex),
+            collage,
+            null)];
     }
 
     private void OpenOutput_Click(object sender, RoutedEventArgs e)
@@ -793,9 +863,95 @@ public partial class MainWindow : Window
         }
 
         RebuildDeck();
+        EnsureStandaloneCollages();
         int? deckFocus = DeckPanel.Visibility == Visibility.Visible ? _deckService.FocusIndex : null;
         _previewStage.ScheduleRefresh(BuildPreviewRequest(), immediate, deckFocus);
     }
+
+    private void EnsureStandaloneCollages()
+    {
+        if (SelectedMode is "manual")
+        {
+            return;
+        }
+
+        if (DeckPanel.Visibility == Visibility.Visible)
+        {
+            return;
+        }
+
+        string input = InputFolderBox.Text.Trim();
+        string mode = SelectedMode;
+        string layout = SelectedLayout;
+        int count = SelectedCount;
+        bool borderless = BorderlessCheck.IsChecked == true;
+
+        IReadOnlyList<ExportJob> jobs = ExportService.BuildJobs(input, mode, layout, count, borderless);
+        if (StandaloneCollagesMatch(jobs))
+        {
+            return;
+        }
+
+        _standaloneCollages = jobs.Select(EditableCollage.FromJob).ToList();
+        _standaloneUndos = jobs.Select(_ => new ManualUndoStack()).ToList();
+    }
+
+    private bool StandaloneCollagesMatch(IReadOnlyList<ExportJob> jobs)
+    {
+        if (_standaloneCollages.Count != jobs.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < jobs.Count; i++)
+        {
+            if (!_standaloneCollages[i].MatchesJob(jobs[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private EditableCollage? GetFocusedCollage()
+    {
+        if (SelectedMode == "manual")
+        {
+            return _manualCollage;
+        }
+
+        if (DeckPanel.Visibility == Visibility.Visible && _deckService.Cards.Count > 0)
+        {
+            return _deckService.Cards[_deckService.FocusIndex].Collage;
+        }
+
+        if (_standaloneCollages.Count == 0)
+        {
+            return null;
+        }
+
+        int index = Math.Clamp(_previewStage.FocusIndex, 0, _standaloneCollages.Count - 1);
+        return _standaloneCollages[index];
+    }
+
+    private ManualUndoStack GetFocusedUndo()
+    {
+        if (SelectedMode == "manual")
+        {
+            return _manualUndo;
+        }
+
+        if (DeckPanel.Visibility == Visibility.Visible && _deckService.Cards.Count > 0)
+        {
+            return _deckService.Cards[_deckService.FocusIndex].UndoStack;
+        }
+
+        int index = Math.Clamp(_previewStage.FocusIndex, 0, _standaloneUndos.Count - 1);
+        return _standaloneUndos[index];
+    }
+
+    private bool HasEditableFocus() => GetFocusedCollage() is not null && !_busy;
 
     private void RebuildDeck()
     {
@@ -842,14 +998,15 @@ public partial class MainWindow : Window
         RequestVisibleDeckPreviews();
     }
 
-    private void SyncPreviewToDeckFocus()
+    private void OnPreviewFocusIndexChanged(int index)
     {
-        if (DeckPanel.Visibility != Visibility.Visible)
+        if (DeckPanel.Visibility == Visibility.Visible)
         {
             return;
         }
 
-        _previewStage.SetCandidateIndex(_deckService.FocusIndex);
+        ClearStageInteractionState();
+        SchedulePreviewRefresh(immediate: true);
     }
 
     private void OnDeckFocusIndexChanged(int index)
@@ -862,7 +1019,8 @@ public partial class MainWindow : Window
         _syncingDeckFocus = true;
         DeckList.SelectedIndex = index;
         _syncingDeckFocus = false;
-        _previewStage.SetCandidateIndex(index);
+        ClearStageInteractionState();
+        SchedulePreviewRefresh(immediate: true);
         RequestVisibleDeckPreviews();
     }
 
@@ -983,8 +1141,26 @@ public partial class MainWindow : Window
     private PreviewRequest BuildPreviewRequest()
     {
         bool borderless = SelectedMode == "manual"
-            ? _manualBorderless
+            ? _manualCollage.Borderless
             : BorderlessCheck.IsChecked == true;
+
+        int focusIndex;
+        int focusCount;
+        if (SelectedMode == "manual")
+        {
+            focusIndex = 0;
+            focusCount = 1;
+        }
+        else if (DeckPanel.Visibility == Visibility.Visible)
+        {
+            focusIndex = _deckService.FocusIndex;
+            focusCount = _deckService.Cards.Count;
+        }
+        else
+        {
+            focusIndex = Math.Clamp(_previewStage.FocusIndex, 0, Math.Max(0, _standaloneCollages.Count - 1));
+            focusCount = Math.Max(1, _standaloneCollages.Count);
+        }
 
         return new PreviewRequest(
             InputFolderBox.Text.Trim(),
@@ -994,20 +1170,16 @@ public partial class MainWindow : Window
             borderless,
             BleedCheck.IsChecked == true,
             SelectedColor,
-            _manualLayout,
-            SelectedMode == "manual" ? _manualSlots : null);
+            GetFocusedCollage(),
+            focusIndex,
+            focusCount);
     }
 
     private void OnPreviewStageUpdated(PreviewStageState state)
     {
         PreviewNavText.Text = state.NavLabel;
-        if (SelectedMode != "manual")
-        {
-            PreviewPrevButton.IsEnabled = state.CanPrev && !_busy;
-            PreviewNextButton.IsEnabled = state.CanNext && !_busy;
-        }
-
-        UseManualButton.IsEnabled = state.CanUseManual && state.CurrentCandidate is not null && !_busy;
+        PreviewPrevButton.IsEnabled = state.CanPrev && !_busy;
+        PreviewNextButton.IsEnabled = state.CanNext && !_busy;
 
         if (state.IsEmpty || state.Bitmap is null)
         {
@@ -1044,7 +1216,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        int index = _previewStage.CandidateIndex;
+        int index = _previewStage.FocusIndex;
         _syncingDeckFocus = true;
         DeckList.SelectedIndex = index;
         _syncingDeckFocus = false;
@@ -1055,7 +1227,7 @@ public partial class MainWindow : Window
 
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
-        if (SelectedMode == "manual" && Keyboard.Modifiers == ModifierKeys.Control && e.OriginalSource is not TextBox)
+        if (HasEditableFocus() && Keyboard.Modifiers == ModifierKeys.Control && e.OriginalSource is not TextBox)
         {
             if (e.Key == Key.Z)
             {
@@ -1096,64 +1268,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UseManual_Click(object sender, RoutedEventArgs e)
+    private void EnsureManualCollageForLayout(string layout)
     {
-        PreviewCandidate? candidate = _previewStage.GetCurrentCandidate();
-        if (candidate is null)
+        int required = LayoutCatalog.GetRequired(layout).NumImages;
+        if (_manualCollage.Layout == layout && _manualCollage.Slots.Count == required)
         {
             return;
         }
 
-        _manualLayout = candidate.LayoutName;
-        _manualBorderless = candidate.Borderless;
-        _manualSlots = BuildManualAssignments(candidate);
-        _manualUndo.Clear();
-        HighlightLayoutCard(_manualLayout);
-        _suppressUiEvents = true;
-        BorderlessCheck.IsChecked = candidate.Borderless;
-        _suppressUiEvents = false;
-        SetMode("manual");
-        UpdateRunEstimate();
-        StatusText.Text =
-            $"Manual slots filled from preview ({_manualSlots.Count} photos). Edit on stage or replace slots.";
+        ResetManualCollageForLayout(layout);
     }
 
-    private static List<SlotAssignment?> BuildManualAssignments(PreviewCandidate candidate)
+    private void ResetManualCollageForLayout(string layout)
     {
-        var assignments = new List<SlotAssignment?>(candidate.Paths.Count);
-        for (int i = 0; i < candidate.Paths.Count; i++)
-        {
-            if (candidate.LayoutName.Equals("grid-1x2-v", StringComparison.OrdinalIgnoreCase))
-            {
-                assignments.Add(new SlotAssignment(
-                    candidate.Paths[i],
-                    PanX: i == 0 ? -1.0 : 1.0,
-                    PanY: 0.0));
-            }
-            else
-            {
-                assignments.Add(new SlotAssignment(candidate.Paths[i]));
-            }
-        }
-
-        return assignments;
-    }
-
-    private void EnsureManualSlotsForLayout(string layout)
-    {
-        int required = LayoutCatalog.GetRequired(layout).NumImages;
-        if (_manualSlots.Count == required)
-        {
-            return;
-        }
-
-        ResetManualSlotsForLayout(layout);
-    }
-
-    private void ResetManualSlotsForLayout(string layout)
-    {
-        int required = LayoutCatalog.GetRequired(layout).NumImages;
-        _manualSlots = Enumerable.Repeat<SlotAssignment?>(null, required).ToList();
+        bool borderless = _manualCollage.Borderless;
+        _manualCollage = EditableCollage.Blank(layout, borderless);
         _manualUndo.Clear();
         ClearStageInteractionState();
         UpdateRunEstimate();
@@ -1173,11 +1302,19 @@ public partial class MainWindow : Window
         StageOverlay.Children.Clear();
     }
 
-    private LayoutGeometry GetManualGeometry() =>
-        LayoutGeometryCalculator.Compute(
-            _manualLayout,
-            _manualBorderless,
+    private LayoutGeometry GetStageGeometry()
+    {
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
+        {
+            return LayoutGeometryCalculator.Compute("stack-3", false, BleedCheck.IsChecked == true);
+        }
+
+        return LayoutGeometryCalculator.Compute(
+            collage.Layout,
+            collage.Borderless,
             BleedCheck.IsChecked == true);
+    }
 
     private ManualStageGeometry.StageMetrics GetStageMetrics() =>
         ManualStageGeometry.ComputeMetrics(StageBorder.ActualWidth, StageBorder.ActualHeight);
@@ -1185,43 +1322,41 @@ public partial class MainWindow : Window
     private int? HitTestStageSlot(Point position)
     {
         ManualStageGeometry.StageMetrics metrics = GetStageMetrics();
-        LayoutGeometry geometry = GetManualGeometry();
+        LayoutGeometry geometry = GetStageGeometry();
         return ManualStageGeometry.HitTestSlot(position.X, position.Y, metrics, geometry);
     }
 
     private void AssignToSlot(int slot, string path)
     {
-        if (slot < 0 || slot >= _manualSlots.Count)
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null || slot < 0 || slot >= collage.Slots.Count)
         {
             return;
         }
 
-        string? orientationError = OrientationHelper.GetOrientationMismatchMessage(
-            path,
-            LayoutCatalog.GetRequired(_manualLayout).Orientation);
-        if (orientationError is not null)
-        {
-            StatusText.Text = orientationError;
-            return;
-        }
-
-        _manualUndo.Checkpoint(_manualSlots);
+        GetFocusedUndo().Checkpoint(collage.Slots);
         double panX = 0.0;
         double panY = 0.0;
-        if (_manualLayout.Equals("grid-1x2-v", StringComparison.OrdinalIgnoreCase) && _manualSlots.Count == 2)
+        if (collage.Layout.Equals("grid-1x2-v", StringComparison.OrdinalIgnoreCase) && collage.Slots.Count == 2)
         {
             panX = slot == 0 ? -1.0 : 1.0;
         }
 
-        _manualSlots[slot] = new SlotAssignment(path, panX, panY);
-        CommitManualEdit($"Assigned slot {slot + 1}.");
+        collage.Slots[slot] = new SlotAssignment(path, panX, panY);
+        CommitCollageEdit($"Assigned slot {slot + 1}.");
     }
 
     private void AssignThumbClick(string path)
     {
-        for (int i = 0; i < _manualSlots.Count; i++)
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
         {
-            if (_manualSlots[i] is null)
+            return;
+        }
+
+        for (int i = 0; i < collage.Slots.Count; i++)
+        {
+            if (collage.Slots[i] is null)
             {
                 AssignToSlot(i, path);
                 return;
@@ -1233,70 +1368,93 @@ public partial class MainWindow : Window
 
     private void ClearSlot(int slot)
     {
-        if (slot < 0 || slot >= _manualSlots.Count || _manualSlots[slot] is null)
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null || slot < 0 || slot >= collage.Slots.Count || collage.Slots[slot] is null)
         {
             return;
         }
 
-        _manualUndo.Checkpoint(_manualSlots);
-        _manualSlots[slot] = null;
-        CommitManualEdit($"Cleared slot {slot + 1}.");
+        GetFocusedUndo().Checkpoint(collage.Slots);
+        collage.Slots[slot] = null;
+        CommitCollageEdit($"Cleared slot {slot + 1}.");
     }
 
     private void SwapSlots(int a, int b)
     {
-        if (a < 0 || b < 0 || a >= _manualSlots.Count || b >= _manualSlots.Count || a == b)
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null || a < 0 || b < 0 || a >= collage.Slots.Count || b >= collage.Slots.Count || a == b)
         {
             return;
         }
 
-        if (_manualSlots[a] is null || _manualSlots[b] is null)
+        if (collage.Slots[a] is null || collage.Slots[b] is null)
         {
             return;
         }
 
-        _manualUndo.Checkpoint(_manualSlots);
-        (_manualSlots[a], _manualSlots[b]) = (_manualSlots[b], _manualSlots[a]);
-        CommitManualEdit($"Swapped slots {a + 1} and {b + 1}.");
+        GetFocusedUndo().Checkpoint(collage.Slots);
+        (collage.Slots[a], collage.Slots[b]) = (collage.Slots[b], collage.Slots[a]);
+        CommitCollageEdit($"Swapped slots {a + 1} and {b + 1}.");
     }
 
     private void ManualUndo()
     {
-        List<SlotAssignment?>? restored = _manualUndo.Undo(_manualSlots);
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
+        {
+            return;
+        }
+
+        List<SlotAssignment?>? restored = GetFocusedUndo().Undo(collage.Slots);
         if (restored is null)
         {
             return;
         }
 
-        _manualSlots = restored;
+        collage.Slots.Clear();
+        collage.Slots.AddRange(restored);
         ClearStageInteractionState();
-        CommitManualEdit("Undo.", refreshImmediate: true);
+        CommitCollageEdit("Undo.", refreshImmediate: true);
     }
 
     private void ManualRedo()
     {
-        List<SlotAssignment?>? restored = _manualUndo.Redo(_manualSlots);
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
+        {
+            return;
+        }
+
+        List<SlotAssignment?>? restored = GetFocusedUndo().Redo(collage.Slots);
         if (restored is null)
         {
             return;
         }
 
-        _manualSlots = restored;
+        collage.Slots.Clear();
+        collage.Slots.AddRange(restored);
         ClearStageInteractionState();
-        CommitManualEdit("Redo.", refreshImmediate: true);
+        CommitCollageEdit("Redo.", refreshImmediate: true);
     }
 
-    private void CommitManualEdit(string status, bool refreshImmediate = false)
+    private void CommitCollageEdit(string status, bool refreshImmediate = false)
     {
         StatusText.Text = status;
         UpdateRunEstimate();
         UpdateModeUi();
+        if (DeckPanel.Visibility == Visibility.Visible &&
+            _deckService.FocusIndex >= 0 &&
+            _deckService.FocusIndex < _deckService.Cards.Count)
+        {
+            _deckService.InvalidatePreviewForIndex(_deckService.FocusIndex);
+        }
+
         SchedulePreviewRefresh(refreshImmediate);
     }
 
     private void Thumb_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (SelectedMode != "manual" || _busy || sender is not FrameworkElement element ||
+        if (!HasEditableFocus() || sender is not FrameworkElement element ||
             element.DataContext is not ThumbnailItem item)
         {
             return;
@@ -1331,7 +1489,7 @@ public partial class MainWindow : Window
             element.ReleaseMouseCapture();
         }
 
-        if (SelectedMode != "manual" || _busy || _thumbDragPath is null)
+        if (!HasEditableFocus() || _thumbDragPath is null)
         {
             _thumbDragPath = null;
             return;
@@ -1363,7 +1521,13 @@ public partial class MainWindow : Window
 
     private void Stage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (SelectedMode != "manual" || _busy)
+        if (!HasEditableFocus())
+        {
+            return;
+        }
+
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
         {
             return;
         }
@@ -1378,7 +1542,7 @@ public partial class MainWindow : Window
         int? slot = HitTestStageSlot(pos);
         _swapHoverSlot = null;
 
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && slot is not null && _manualSlots[slot.Value] is not null)
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && slot is not null && collage.Slots[slot.Value] is not null)
         {
             _swapPickupSlot = slot;
             _stageDownSlot = null;
@@ -1403,7 +1567,13 @@ public partial class MainWindow : Window
 
     private void Stage_MouseMove(object sender, MouseEventArgs e)
     {
-        if (SelectedMode != "manual")
+        if (!HasEditableFocus())
+        {
+            return;
+        }
+
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
         {
             return;
         }
@@ -1417,7 +1587,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_stageDownSlot is null || _manualSlots[_stageDownSlot.Value] is null)
+        if (_stageDownSlot is null || collage.Slots[_stageDownSlot.Value] is null)
         {
             return;
         }
@@ -1434,14 +1604,14 @@ public partial class MainWindow : Window
 
             _stagePanMoved = true;
             _panDragSlot = slot;
-            SlotAssignment fill = _manualSlots[slot]!;
+            SlotAssignment fill = collage.Slots[slot]!;
             _panAnchor = (fill.PanX, fill.PanY);
         }
 
         (double SensX, double SensY)? sens = ManualStageGeometry.PanSensitivity(
             slot,
             GetStageMetrics(),
-            GetManualGeometry());
+            GetStageGeometry());
         if (sens is null || _panAnchor is null)
         {
             return;
@@ -1456,13 +1626,14 @@ public partial class MainWindow : Window
 
     private void Stage_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (SelectedMode != "manual")
+        if (!HasEditableFocus())
         {
             ClearStageInteractionState();
             StageBorder.ReleaseMouseCapture();
             return;
         }
 
+        EditableCollage? collage = GetFocusedCollage();
         Point pos = e.GetPosition(StageBorder);
 
         if (_swapPickupSlot is not null)
@@ -1488,17 +1659,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_stagePanMoved && _panDragSlot is not null && _panLive is not null)
+        if (_stagePanMoved && _panDragSlot is not null && _panLive is not null && collage is not null)
         {
             int slot = _panDragSlot.Value;
-            SlotAssignment? fill = _manualSlots[slot];
+            SlotAssignment? fill = collage.Slots[slot];
             if (fill is not null)
             {
                 _previewStage.FlushPendingRender();
                 _previewStage.ClearManualLivePan();
-                _manualUndo.Checkpoint(_manualSlots);
-                _manualSlots[slot] = fill with { PanX = _panLive.Value.X, PanY = _panLive.Value.Y };
-                CommitManualEdit($"Slot {slot + 1} pan updated.", refreshImmediate: true);
+                GetFocusedUndo().Checkpoint(collage.Slots);
+                collage.Slots[slot] = fill with { PanX = _panLive.Value.X, PanY = _panLive.Value.Y };
+                CommitCollageEdit($"Slot {slot + 1} pan updated.", refreshImmediate: true);
             }
         }
         else
@@ -1518,27 +1689,28 @@ public partial class MainWindow : Window
 
     private void HandleStageDoubleClick(MouseButtonEventArgs e)
     {
+        EditableCollage? collage = GetFocusedCollage();
         ClearStageInteractionState();
         Point pos = e.GetPosition(StageBorder);
         int? slot = HitTestStageSlot(pos);
-        if (slot is null || _manualSlots[slot.Value] is not SlotAssignment fill)
+        if (collage is null || slot is null || collage.Slots[slot.Value] is not SlotAssignment fill)
         {
             return;
         }
 
-        _manualUndo.Checkpoint(_manualSlots);
+        GetFocusedUndo().Checkpoint(collage.Slots);
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
-            _manualSlots[slot.Value] = fill with { Grayscale = !fill.Grayscale };
-            CommitManualEdit(
-                $"Slot {slot.Value + 1}: black & white {(_manualSlots[slot.Value]!.Grayscale ? "on" : "off")}.",
+            collage.Slots[slot.Value] = fill with { Grayscale = !fill.Grayscale };
+            CommitCollageEdit(
+                $"Slot {slot.Value + 1}: black & white {(!fill.Grayscale ? "on" : "off")}.",
                 refreshImmediate: true);
         }
         else
         {
-            _manualSlots[slot.Value] = fill with { FlipH = !fill.FlipH };
-            CommitManualEdit(
-                $"Slot {slot.Value + 1}: horizontal flip {(_manualSlots[slot.Value]!.FlipH ? "on" : "off")}.",
+            collage.Slots[slot.Value] = fill with { FlipH = !fill.FlipH };
+            CommitCollageEdit(
+                $"Slot {slot.Value + 1}: horizontal flip {(!fill.FlipH ? "on" : "off")}.",
                 refreshImmediate: true);
         }
 
@@ -1547,7 +1719,7 @@ public partial class MainWindow : Window
 
     private void Stage_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (SelectedMode != "manual" || _busy)
+        if (!HasEditableFocus())
         {
             return;
         }
@@ -1564,13 +1736,13 @@ public partial class MainWindow : Window
     private void UpdateSwapOverlay()
     {
         StageOverlay.Children.Clear();
-        if (SelectedMode != "manual" || _swapPickupSlot is null)
+        if (_swapPickupSlot is null || !HasEditableFocus())
         {
             return;
         }
 
         ManualStageGeometry.StageMetrics metrics = GetStageMetrics();
-        LayoutGeometry geometry = GetManualGeometry();
+        LayoutGeometry geometry = GetStageGeometry();
         IReadOnlyList<(int X0, int Y0, int X1, int Y1)> rects =
             ManualStageGeometry.SlotPixelRects(metrics, geometry);
 

@@ -8,5 +8,36 @@
         <SolidColorBrush x:Key="LayoutCardSelectedBrush" Color="#3D6EA5" />
         <SolidColorBrush x:Key="LayoutCardBrush" Color="#3A3A3A" />
         <SolidColorBrush x:Key="LayoutCardForegroundBrush" Color="#F0F0F0" />
+        <SolidColorBrush x:Key="SidebarLabelBrush" Color="#E6E6E6" />
+        <SolidColorBrush x:Key="SidebarMutedBrush" Color="#CFCFCF" />
+        <Style TargetType="Button" x:Key="DarkButtonStyle">
+            <Setter Property="Foreground" Value="#F2F2F2" />
+            <Setter Property="Background" Value="#3A3A3A" />
+            <Setter Property="BorderBrush" Value="#666" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#4A4A4A" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#888" />
+                    <Setter Property="Background" Value="#2A2A2A" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="Button" BasedOn="{StaticResource DarkButtonStyle}" />
     </Application.Resources>
 </Application>

@@ -1,4 +1,4 @@
-namespace ImageStacker.Core.Layout;
+﻿namespace ImageStacker.Core.Layout;
 
 public enum LayoutOrientation
 {
@@ -22,11 +22,14 @@ public static class LayoutCatalog
         {
             ["stack-2"] = new("stack-2", 2, 2, 1, LayoutOrientation.Horizontal, Framed: false),
             ["stack-3"] = new("stack-3", 3, 3, 1, LayoutOrientation.Horizontal, Framed: false),
+            ["stack-4"] = new("stack-4", 4, 4, 1, LayoutOrientation.Horizontal, Framed: false),
             ["grid-1x2-v"] = new("grid-1x2-v", 2, 1, 2, LayoutOrientation.Vertical, Framed: false),
-            ["grid-1x3-m"] = new("grid-1x3-m", 3, 1, 3, LayoutOrientation.Mixed, Framed: false),
+            ["grid-1x3-h"] = new("grid-1x3-h", 3, 1, 3, LayoutOrientation.Horizontal, Framed: false),
+            ["grid-1x3-v"] = new("grid-1x3-v", 3, 1, 3, LayoutOrientation.Vertical, Framed: false),
             ["grid-2x4"] = new("grid-2x4", 8, 4, 2, LayoutOrientation.Horizontal, Framed: false),
             ["grid-3x3"] = new("grid-3x3", 9, 3, 3, LayoutOrientation.Horizontal, Framed: false),
             ["grid-2x2-v"] = new("grid-2x2-v", 4, 2, 2, LayoutOrientation.Vertical, Framed: true),
+            ["grid-2x2-h"] = new("grid-2x2-h", 4, 2, 2, LayoutOrientation.Horizontal, Framed: true),
         };
 
     public static LayoutDefinition GetRequired(string layoutName)

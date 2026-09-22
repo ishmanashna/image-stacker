@@ -247,6 +247,105 @@ public class LayoutGeometryTests
             Assert.True(pos.Y + pos.Height <= Constants.CanvasHeight);
         }
     }
+
+    [Fact]
+    public void BorderlessStack3TilesFillCanvasWithoutGaps()
+    {
+        LayoutGeometry geometry = LayoutGeometryCalculator.Compute("stack-3", borderless: true);
+        Assert.Equal(3, geometry.Positions.Count);
+        Assert.Equal(0, geometry.Positions[0].Y);
+        Assert.Equal(geometry.Positions[0].Y + geometry.Positions[0].Height, geometry.Positions[1].Y);
+        Assert.Equal(geometry.Positions[1].Y + geometry.Positions[1].Height, geometry.Positions[2].Y);
+        Assert.Equal(Constants.CanvasHeight, geometry.Positions[2].Y + geometry.Positions[2].Height);
+        Assert.All(geometry.Positions, p => Assert.Equal(Constants.CanvasWidth, p.Width));
+    }
+
+    [Fact]
+    public void Stack4HasFourStackedCellsFillingHeight()
+    {
+        LayoutGeometry geometry = LayoutGeometryCalculator.Compute("stack-4", borderless: true);
+        Assert.Equal(4, geometry.Positions.Count);
+        Assert.Equal(LayoutOrientation.Horizontal, LayoutCatalog.GetRequired("stack-4").Orientation);
+        Assert.Equal(0, geometry.Positions[0].Y);
+        for (int i = 1; i < 4; i++)
+        {
+            Assert.Equal(
+                geometry.Positions[i - 1].Y + geometry.Positions[i - 1].Height,
+                geometry.Positions[i].Y);
+        }
+
+        Assert.Equal(Constants.CanvasHeight, geometry.Positions[3].Y + geometry.Positions[3].Height);
+        Assert.All(geometry.Positions, p => Assert.Equal(Constants.CanvasWidth, p.Width));
+    }
+
+    [Fact]
+    public void Grid2x2HIsFramedHorizontalFourCells()
+    {
+        var def = LayoutCatalog.GetRequired("grid-2x2-h");
+        Assert.Equal(4, def.NumImages);
+        Assert.True(def.Framed);
+        Assert.Equal(LayoutOrientation.Horizontal, def.Orientation);
+
+        LayoutGeometry framed = LayoutGeometryCalculator.Compute("grid-2x2-h", borderless: false);
+        Assert.Equal(4, framed.Positions.Count);
+        Assert.All(framed.Positions, p =>
+        {
+            Assert.True(p.X >= 150);
+            Assert.True(p.Y >= 150);
+            Assert.True(p.X + p.Width <= Constants.CanvasWidth - 150);
+            Assert.True(p.Y + p.Height <= Constants.CanvasHeight - 150);
+        });
+
+        LayoutGeometry borderless = LayoutGeometryCalculator.Compute("grid-2x2-h", borderless: true);
+        Assert.Contains(borderless.Positions, p => p.X == 0 || p.Y == 0);
+    }
+
+    [Fact]
+    public void Row1x3SplitsIntoHonestHAndVLayouts()
+    {
+        Assert.False(LayoutCatalog.Layouts.ContainsKey("grid-1x3-m"));
+        Assert.Equal(LayoutOrientation.Horizontal, LayoutCatalog.GetRequired("grid-1x3-h").Orientation);
+        Assert.Equal(LayoutOrientation.Vertical, LayoutCatalog.GetRequired("grid-1x3-v").Orientation);
+        Assert.Equal(3, LayoutGeometryCalculator.Compute("grid-1x3-h", borderless: false).Positions.Count);
+        Assert.Equal(3, LayoutGeometryCalculator.Compute("grid-1x3-v", borderless: false).Positions.Count);
+    }
+
+    [Fact]
+    public void UnknownLayoutThrows()
+    {
+        Assert.Throws<ArgumentException>(() => LayoutCatalog.GetRequired("nope"));
+    }
+
+    [Fact]
+    public void Stack2BleedOverlapsVerticalSeam()
+    {
+        LayoutGeometry plain = LayoutGeometryCalculator.Compute("stack-2", borderless: false, bleed: false);
+        LayoutGeometry bled = LayoutGeometryCalculator.Compute("stack-2", borderless: false, bleed: true);
+        Assert.Equal(2, bled.Positions.Count);
+        Assert.True(bled.Positions[0].Y + bled.Positions[0].Height > bled.Positions[1].Y);
+        Assert.True(bled.Positions[0].Height > plain.Positions[0].Height);
+        Assert.True(bled.Positions[1].Height > plain.Positions[1].Height);
+    }
+
+    [Fact]
+    public void BleedPlusBorderlessEqualsBorderless()
+    {
+        LayoutGeometry borderless = LayoutGeometryCalculator.Compute("stack-2", borderless: true, bleed: false);
+        LayoutGeometry both = LayoutGeometryCalculator.Compute("stack-2", borderless: true, bleed: true);
+        Assert.Equal(borderless.Positions, both.Positions);
+    }
+
+    [Fact]
+    public void GridBleedOverlapsInternalSeamsOnly()
+    {
+        LayoutGeometry bled = LayoutGeometryCalculator.Compute("grid-2x2-v", borderless: false, bleed: true);
+        Assert.Equal(4, bled.Positions.Count);
+        var a = bled.Positions[0];
+        var b = bled.Positions[1];
+        Assert.True(a.X + a.Width > b.X);
+        Assert.True(a.X > 0);
+        Assert.True(a.Y > 0);
+    }
 }
 
 public class CoverMathTests
@@ -311,14 +410,39 @@ public class CoverMathTests
 
             using var leftCell = ImagePipeline.ProcessImageForCell(
                 cache, paths[0], cellW, cellH,
-                geometry.Orientation, -1, 0, false, false)!;
+                -1, 0, false, false)!;
             using var rightCell = ImagePipeline.ProcessImageForCell(
                 cache, paths[1], geometry.CellSizes[1].Width, geometry.CellSizes[1].Height,
-                geometry.Orientation, 1, 0, false, false)!;
+                1, 0, false, false)!;
 
             Assert.NotNull(leftCell);
             Assert.NotNull(rightCell);
             Assert.False(CellsArePixelIdentical(leftCell, rightCell));
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public void ProcessImageForCellAcceptsPortraitIntoHorizontalLayoutCell()
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            string portrait = SyntheticImages.CreatePortraitJpeg(temp);
+            using var cache = new SourceImageCache();
+            LayoutGeometry geometry = LayoutGeometryCalculator.Compute("stack-3", borderless: false);
+            int cellW = geometry.CellSizes[0].Width;
+            int cellH = geometry.CellSizes[0].Height;
+
+            using var cell = ImagePipeline.ProcessImageForCell(
+                cache, portrait, cellW, cellH, 0, 0, false, false);
+
+            Assert.NotNull(cell);
+            Assert.Equal(cellW, cell!.Width);
+            Assert.Equal(cellH, cell.Height);
         }
         finally
         {
@@ -480,5 +604,19 @@ internal static class CoverMath
         double normLeft = excessW > 0 ? left / excessW : 0;
         double normTop = excessH > 0 ? top / excessH : 0;
         return (normLeft, normTop);
+    }
+}
+
+public class CropDefaultsTests
+{
+    [Fact]
+    public void GoldilocksPanYBiasesUpForHorizontalLayouts()
+    {
+        Assert.True(CropDefaults.DefaultPanY("stack-4") < 0);
+        Assert.True(CropDefaults.DefaultPanY("grid-2x2-h") < 0);
+        Assert.Equal(0.0, CropDefaults.DefaultPanY("grid-2x2-v"));
+        Assert.Equal(0.0, CropDefaults.DefaultPanY("grid-1x3-v"));
+        Assert.Equal(-1.0, CropDefaults.DefaultPanX("grid-1x2-v", 0));
+        Assert.Equal(1.0, CropDefaults.DefaultPanX("grid-1x2-v", 1));
     }
 }

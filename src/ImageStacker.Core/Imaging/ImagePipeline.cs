@@ -1,5 +1,3 @@
-using ImageStacker.Core.Io;
-using ImageStacker.Core.Layout;
 using NetVips;
 
 namespace ImageStacker.Core.Imaging;
@@ -93,12 +91,33 @@ public static class ImagePipeline
         using var cropped = flattened.ExtractArea(left, top, cropW, cropH);
         double resizeScale = targetWidth / (double)cropW;
         using var resized = cropped.Resize(resizeScale, kernel: Enums.Kernel.Lanczos3);
-        if (resized.Width != targetWidth || resized.Height != targetHeight)
+        return ForceExactSize(resized, targetWidth, targetHeight);
+    }
+
+    /// <summary>
+    /// Lanczos resize can land 1px off the target; crop/embed so paste never leaves a canvas hairline.
+    /// Always returns a new image; does not take ownership of <paramref name="image"/>.
+    /// </summary>
+    private static NetVips.Image ForceExactSize(NetVips.Image image, int targetWidth, int targetHeight)
+    {
+        if (image.Width == targetWidth && image.Height == targetHeight)
         {
-            return resized.Crop(0, 0, targetWidth, targetHeight).Copy();
+            return image.Copy();
         }
 
-        return resized.Copy();
+        int cropW = Math.Min(image.Width, targetWidth);
+        int cropH = Math.Min(image.Height, targetHeight);
+        if (image.Width >= targetWidth && image.Height >= targetHeight)
+        {
+            return image.Crop(0, 0, targetWidth, targetHeight).Copy();
+        }
+
+        using var cropped = (cropW != image.Width || cropH != image.Height)
+            ? image.Crop(0, 0, cropW, cropH)
+            : null;
+        NetVips.Image src = cropped ?? image;
+        using var embedded = src.Embed(0, 0, targetWidth, targetHeight, extend: Enums.Extend.Copy);
+        return embedded.Copy();
     }
 
     public static NetVips.Image ApplyTransforms(NetVips.Image image, bool flipH, bool grayscale)
@@ -126,17 +145,11 @@ public static class ImagePipeline
         string path,
         int targetWidth,
         int targetHeight,
-        LayoutOrientation requiredOrientation,
         double panX,
         double panY,
         bool flipH,
         bool grayscale)
     {
-        if (!OrientationHelper.MatchesOrientation(path, requiredOrientation))
-        {
-            return null;
-        }
-
         using var loaded = LoadForCell(cache, path, targetWidth, targetHeight);
         using var covered = CoverResizePanned(loaded, targetWidth, targetHeight, panX, panY);
         return ApplyTransforms(covered, flipH, grayscale);
@@ -153,17 +166,11 @@ public static class ImagePipeline
         string path,
         int targetWidth,
         int targetHeight,
-        LayoutOrientation requiredOrientation,
         double panX,
         double panY,
         bool flipH,
         bool grayscale)
     {
-        if (!OrientationHelper.MatchesOrientation(path, requiredOrientation))
-        {
-            return null;
-        }
-
         using var loaded = LoadForPreview(path, targetWidth, targetHeight);
         using var covered = CoverResizePanned(loaded, targetWidth, targetHeight, panX, panY);
         return ApplyTransforms(covered, flipH, grayscale);

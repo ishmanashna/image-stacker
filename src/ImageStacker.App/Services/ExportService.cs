@@ -1,7 +1,6 @@
 using ImageStacker.Core;
 using ImageStacker.Core.Layout;
 using ImageStacker.Core.Contracts;
-using ImageStacker.Core.Io;
 using ImageStacker.Core.Jobs;
 
 namespace ImageStacker.App.Services;
@@ -70,15 +69,51 @@ internal static class ExportService
       .ToList();
   }
 
+  public static ExportJob BuildExportJobFromCollage(
+    EditableCollage collage,
+    int jobIndex,
+    string? outputPath = null)
+  {
+    var paths = collage.Slots.Select(s => s!.Path).ToList();
+    var slots = collage.Slots.Select(s => s!).ToList();
+    return new ExportJob(paths, collage.Layout, collage.Borderless, jobIndex, slots, outputPath);
+  }
+
+  public static string? ValidateCollage(EditableCollage collage, string? context = null)
+  {
+    string prefix = context is null ? string.Empty : $"{context}: ";
+    int required = LayoutCatalog.GetRequired(collage.Layout).NumImages;
+
+    if (collage.Slots.Count != required)
+    {
+      return $"{prefix}Slots must match layout ({required} slots).";
+    }
+
+    if (collage.Slots.Any(s => s is null))
+    {
+      return $"{prefix}Fill all {required} slots on the preview.";
+    }
+
+    foreach (SlotAssignment? slot in collage.Slots)
+    {
+      if (slot is null || !File.Exists(slot.Path))
+      {
+        return slot is null
+          ? $"{prefix}Fill all {required} slots on the preview."
+          : $"{prefix}Missing photo: {slot.Path}";
+      }
+    }
+
+    return null;
+  }
+
   public static string? ValidateRun(
     string inputFolder,
     string outputFolder,
     string mode,
     string layout,
     int count,
-    bool borderless,
-    IReadOnlyList<SlotAssignment?>? manualSlots = null,
-    string? manualLayout = null)
+    bool borderless)
   {
     if (mode != "manual" && !Directory.Exists(inputFolder))
     {
@@ -96,40 +131,6 @@ internal static class ExportService
 
     if (mode == "manual")
     {
-      if (manualSlots is null || manualLayout is null)
-      {
-        return "Manual slots are not initialized.";
-      }
-
-      int required = LayoutCatalog.GetRequired(manualLayout).NumImages;
-      if (manualSlots.Count != required)
-      {
-        return $"Manual slots must match layout ({required} slots).";
-      }
-
-      if (manualSlots.Any(s => s is null))
-      {
-        return $"Fill all {required} slots on the preview.";
-      }
-
-      foreach (SlotAssignment? slot in manualSlots)
-      {
-        if (slot is null || !File.Exists(slot.Path))
-        {
-          return slot is null
-            ? $"Fill all {required} slots on the preview."
-            : $"Missing photo: {slot.Path}";
-        }
-
-        string? orientationError = OrientationHelper.GetOrientationMismatchMessage(
-          slot.Path,
-          LayoutCatalog.GetRequired(manualLayout).Orientation);
-        if (orientationError is not null)
-        {
-          return orientationError;
-        }
-      }
-
       return null;
     }
 

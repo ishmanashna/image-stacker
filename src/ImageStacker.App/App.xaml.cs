@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using ImageStacker.App.Services;
 using ImageStacker.Core;
 
@@ -9,14 +9,24 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        FileLogger.Initialize();
-        CoreDiagnostics.WarningHandler = FileLogger.Warning;
-        FileLogger.Info("Image Stacker starting.");
+
+        try
+        {
+            FileLogger.Initialize();
+            CoreDiagnostics.WarningHandler = FileLogger.Warning;
+            FileLogger.Info("Image Stacker starting.");
+        }
+        catch (Exception ex)
+        {
+            // Logging must never block startup.
+            System.Diagnostics.Debug.WriteLine($"Logger init failed: {ex}");
+        }
+
         DispatcherUnhandledException += (_, args) =>
         {
-            FileLogger.Error("Unhandled exception", args.Exception);
+            try { FileLogger.Error("Unhandled exception", args.Exception); } catch { /* ignore */ }
             MessageBox.Show(
-                $"An unexpected error occurred:\n{args.Exception.Message}",
+                $"An unexpected error occurred:\n{args.Exception.GetBaseException().Message}",
                 "Image Stacker",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);

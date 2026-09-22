@@ -136,6 +136,21 @@ internal sealed class DeckService : IDisposable
         QueuePreview(card);
     }
 
+    /// <summary>
+    /// Drop a card's cached thumbnail and rebuild it from current slot edits.
+    /// </summary>
+    public void InvalidatePreviewForIndex(int index)
+    {
+        if (index < 0 || index >= Cards.Count)
+        {
+            return;
+        }
+
+        DeckCardItem card = Cards[index];
+        card.ClearPreviewState();
+        RequestPreviewForIndex(index);
+    }
+
     private void SoftRefresh(string color, bool bleed)
     {
         CancelPreviews();
@@ -155,7 +170,7 @@ internal sealed class DeckService : IDisposable
         _bleed = bleed;
 
         var cards = jobs
-            .Select(job => new DeckCardItem(job.JobIndex, job.LayoutName, job.Borderless, job.Paths))
+            .Select(job => new DeckCardItem(job))
             .ToList();
 
         Cards = cards;
@@ -210,13 +225,12 @@ internal sealed class DeckService : IDisposable
             try
             {
                 token.ThrowIfCancellationRequested();
-                using Image preview = LayoutContracts.RenderPreview(
-                    card.Paths,
+                using Image preview = LayoutContracts.RenderManualPreview(
                     card.LayoutName,
                     card.Borderless,
                     color,
                     bleed,
-                    null,
+                    card.Collage.Slots,
                     PreviewLongEdge);
                 BitmapBuffer buffer = VipsBitmapConverter.ImageToBuffer(preview);
 

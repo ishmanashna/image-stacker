@@ -1,6 +1,6 @@
 # Image Stacker
 
-Windows desktop and CLI tool for Instagram-style **layout collages** (stack, grid, combo pack, manual slot editing).
+Windows desktop and CLI tool for Instagram-style **layout collages** (stack, grid, combo pack, editable slot crops).
 
 Exports portrait collages at **3840×4800** with JPEG output capped at **8 MB** (Instagram upload limit). Built with **.NET 8**, **WPF**, and **libvips** (NetVips).
 
@@ -22,7 +22,13 @@ dotnet run --project src/ImageStacker.App
 dotnet run --project src/ImageStacker.Cli -- --help
 ```
 
-Point the app at a folder of `.jpg` / `.jpeg` / `.png` images, pick a layout, and export.
+Point the app at a folder of `.jpg` / `.jpeg` / `.png` images, pick a layout, and export. In combo/batch/random the GUI shows a deck of candidates — edit any card on the stage, tick what you want, then Run (CLI still writes the full set).
+
+### Editing
+
+You can edit any collage on the stage: assign photos from the library, pan, flip, swap slots (Ctrl+drag), clear, undo/redo. Generated single/batch/random/combo cards keep their edits while you browse the deck. **Blank collage** mode starts an empty layout with the same tools.
+
+When a deck is visible, Run asks **export current** (focused card) or **export all** ticked cards. Any photo can go in any slot — the app cover-crops to the cell. Auto batch/random/combo still only *build* from photos that match each layout’s orientation.
 
 ### Entry points
 
@@ -41,7 +47,8 @@ dotnet run --project src/ImageStacker.Cli -- <folder> --output <dir> [options]
 **Examples:**
 
 ```powershell
-dotnet run --project src/ImageStacker.Cli -- .\photos --layout stack-3 --count 2 --output output
+dotnet run --project src/ImageStacker.Cli -- .\photos --layout stack-3 --output output
+dotnet run --project src/ImageStacker.Cli -- .\photos --layout stack-3 --random --count 5 --output output
 dotnet run --project src/ImageStacker.Cli -- .\photos --combo --output output
 dotnet run --project src/ImageStacker.Cli -- .\photos --layout grid-2x4 --batch --borderless --bleed --color beige --output output
 ```
@@ -52,20 +59,23 @@ dotnet run --project src/ImageStacker.Cli -- .\photos --layout grid-2x4 --batch 
 |------|-------|-------|
 | `stack-2` | 2 | Horizontal strips |
 | `stack-3` | 3 | Horizontal strips |
+| `stack-4` | 4 | Horizontal strips |
 | `grid-1x2-v` | 2 | Two portrait columns |
-| `grid-1x3-m` | 3 | Mixed orientation row |
+| `grid-1x3-h` | 3 | Three landscape cells |
+| `grid-1x3-v` | 3 | Three portrait cells |
 | `grid-2x4` | 8 | 4×2 grid |
 | `grid-3x3` | 9 | 3×3 grid |
 | `grid-2x2-v` | 4 | Framed 2×2 (portrait slots) |
+| `grid-2x2-h` | 4 | Framed 2×2 (landscape slots) |
 
 **Flags:**
 
 | Flag | Description |
 |------|-------------|
 | `--combo` | Standard set: 10× grid-2x4 (NB), 10× stack-3 (NB), 10× grid-2x2-v framed, 10× grid-2x2-v borderless |
-| `--count N` | Number of collages for `--random` (default `1`) |
-| `--batch` | Use all available images in non-overlapping groups |
-| `--random` | Shuffle image order |
+| `--count N` | Number of groups for `--random` only (ignored for plain single/batch) |
+| `--batch` | Non-overlapping groups of N photos (sorted path order) |
+| `--random` | Random groups; use with `--count` |
 | `--output DIR` | Output folder (required) |
 | `--borderless` | Remove borders / frames |
 | `--bleed` | Top row edge-to-edge (editorial style) |
@@ -96,8 +106,10 @@ src/
   ImageStacker.Cli/     # Command-line export
   ImageStacker.App/     # WPF desktop UI
   ImageStacker.Tests/   # xUnit tests
+ARCHITECTURE.md         # How the pieces fit together
 docs/
   DESKTOP_RESTACK_PLAN.md
+  POST_RESTACK_FIXES_PLAN.md
 ```
 
 ## Publish (self-contained win-x64)

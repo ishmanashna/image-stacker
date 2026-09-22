@@ -1,27 +1,29 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Media.Imaging;
+using ImageStacker.Core.Jobs;
 
 namespace ImageStacker.App.Services;
 
 internal sealed class DeckCardItem : INotifyPropertyChanged
 {
-    public DeckCardItem(
-        int deckIndex,
-        string layoutName,
-        bool borderless,
-        IReadOnlyList<string> paths)
+    public DeckCardItem(ExportJob job)
     {
-        DeckIndex = deckIndex;
-        LayoutName = layoutName;
-        Borderless = borderless;
-        Paths = paths;
+        DeckIndex = job.JobIndex;
+        Collage = EditableCollage.FromJob(job);
     }
 
     public int DeckIndex { get; }
-    public string LayoutName { get; }
-    public bool Borderless { get; }
-    public IReadOnlyList<string> Paths { get; }
+
+    public EditableCollage Collage { get; }
+
+    public ManualUndoStack UndoStack { get; } = new();
+
+    public string LayoutName => Collage.Layout;
+
+    public bool Borderless => Collage.Borderless;
+
+    public IReadOnlyList<string> Paths => Collage.Paths;
 
     public string Label => $"{DeckIndex}: {LayoutName}";
 
@@ -106,9 +108,7 @@ internal sealed class DeckCardItem : INotifyPropertyChanged
 
     internal bool MatchesJob(int jobIndex, string layoutName, bool borderless, IReadOnlyList<string> paths) =>
         DeckIndex == jobIndex &&
-        LayoutName == layoutName &&
-        Borderless == borderless &&
-        Paths.SequenceEqual(paths, StringComparer.OrdinalIgnoreCase);
+        Collage.MatchesJob(new ExportJob(paths, layoutName, borderless, jobIndex));
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

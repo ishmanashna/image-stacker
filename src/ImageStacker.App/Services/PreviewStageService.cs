@@ -8,21 +8,14 @@ using NetVips;
 
 namespace ImageStacker.App.Services;
 
-internal sealed record PreviewCandidate(
-    IReadOnlyList<string> Paths,
-    string LayoutName,
-    bool Borderless);
-
 internal sealed class PreviewStageState
 {
     public WriteableBitmap? Bitmap { get; init; }
     public string NavLabel { get; init; } = "—";
     public bool CanPrev { get; init; }
     public bool CanNext { get; init; }
-    public bool CanUseManual { get; init; }
     public string EmptyMessage { get; init; } = string.Empty;
     public bool IsEmpty { get; init; }
-    public PreviewCandidate? CurrentCandidate { get; init; }
 }
 
 internal sealed class ManualLiveOverrides
@@ -35,17 +28,17 @@ internal sealed class ManualLiveOverrides
 internal sealed class PreviewStageService : IDisposable
 {
     private const int DebounceMs = 280;
-    private const int ManualDebounceMs = 48;
-    private const int ManualPanDebounceMs = 32;
+    private const int EditDebounceMs = 48;
+    private const int PanDebounceMs = 32;
     private const int PreviewLongEdge = 1000;
 
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _debounceTimer;
     private CancellationTokenSource? _renderCts;
-    private int _candidateIndex;
-    private IReadOnlyList<PreviewCandidate> _candidates = Array.Empty<PreviewCandidate>();
+    private int _focusIndex;
     private PreviewRequest? _pendingRequest;
     private ManualLiveOverrides? _manualLive;
+    private bool _fastDebounce;
 
     public PreviewStageService(Dispatcher dispatcher)
     {
@@ -63,39 +56,30 @@ internal sealed class PreviewStageService : IDisposable
 
     public event Action<PreviewStageState>? StageUpdated;
 
+    public event Action<int>? FocusIndexChanged;
+
     public void ScheduleRefresh(PreviewRequest request, bool immediate = false, int? initialIndex = null)
     {
         _pendingRequest = request;
-        if (request.Mode == "manual")
-        {
-            _debounceTimer.Interval = TimeSpan.FromMilliseconds(immediate ? 0 : ManualDebounceMs);
-            _debounceTimer.Stop();
-            if (immediate)
-            {
-                _ = RenderCurrentAsync();
-            }
-            else
-            {
-                _debounceTimer.Start();
-            }
-
-            return;
-        }
-
-        _manualLive = null;
-        RebuildCandidates(request);
         if (initialIndex is int index)
         {
-            _candidateIndex = Math.Clamp(index, 0, Math.Max(0, _candidates.Count - 1));
+            _focusIndex = Math.Clamp(index, 0, Math.Max(0, request.FocusCount - 1));
         }
         else
         {
-            _candidateIndex = Math.Clamp(_candidateIndex, 0, Math.Max(0, _candidates.Count - 1));
+            _focusIndex = Math.Clamp(request.FocusIndex, 0, Math.Max(0, request.FocusCount - 1));
         }
 
-        _debounceTimer.Interval = TimeSpan.FromMilliseconds(DebounceMs);
+        int debounce = _fastDebounce ? PanDebounceMs : immediate ? 0 : EditDebounceMs;
+        _fastDebounce = false;
+        if (!immediate && request.Mode != "manual")
+        {
+            debounce = DebounceMs;
+        }
+
+        _debounceTimer.Interval = TimeSpan.FromMilliseconds(debounce);
         _debounceTimer.Stop();
-        if (immediate)
+        if (immediate || debounce == 0)
         {
             _ = RenderCurrentAsync();
         }
@@ -113,17 +97,18 @@ internal sealed class PreviewStageService : IDisposable
             LivePanX = panX,
             LivePanY = panY,
         };
-        ScheduleManualPanRefresh();
+        SchedulePanRefresh();
     }
 
-    private void ScheduleManualPanRefresh()
+    private void SchedulePanRefresh()
     {
         if (_pendingRequest is null)
         {
             throw new InvalidOperationException("No preview request.");
         }
 
-        _debounceTimer.Interval = TimeSpan.FromMilliseconds(ManualPanDebounceMs);
+        _fastDebounce = true;
+        _debounceTimer.Interval = TimeSpan.FromMilliseconds(PanDebounceMs);
         _debounceTimer.Stop();
         _debounceTimer.Start();
     }
@@ -144,87 +129,48 @@ internal sealed class PreviewStageService : IDisposable
         _ = RenderCurrentAsync();
     }
 
-    public int CandidateIndex => _candidateIndex;
+    public int FocusIndex => _focusIndex;
 
-    public int CandidateCount => _candidates.Count;
+    public int FocusCount => _pendingRequest?.FocusCount ?? 0;
 
-    public void SetCandidateIndex(int index)
+    public void SetFocusIndex(int index)
     {
-        if (_candidates.Count == 0)
+        if (_pendingRequest is null || _pendingRequest.FocusCount == 0)
         {
             return;
         }
 
-        int clamped = Math.Clamp(index, 0, _candidates.Count - 1);
-        if (clamped == _candidateIndex)
+        int clamped = Math.Clamp(index, 0, _pendingRequest.FocusCount - 1);
+        if (clamped == _focusIndex)
         {
             return;
         }
 
-        _candidateIndex = clamped;
-        _ = RenderCurrentAsync();
+        _focusIndex = clamped;
+        FocusIndexChanged?.Invoke(_focusIndex);
     }
 
     public void MovePrevious()
     {
-        if (_candidateIndex > 0)
+        if (_focusIndex > 0)
         {
-            SetCandidateIndex(_candidateIndex - 1);
+            SetFocusIndex(_focusIndex - 1);
         }
     }
 
     public void MoveNext()
     {
-        if (_candidateIndex < _candidates.Count - 1)
+        if (_pendingRequest is not null && _focusIndex < _pendingRequest.FocusCount - 1)
         {
-            SetCandidateIndex(_candidateIndex + 1);
+            SetFocusIndex(_focusIndex + 1);
         }
     }
-
-    public PreviewCandidate? GetCurrentCandidate() =>
-        _candidates.Count == 0 || _candidateIndex < 0 || _candidateIndex >= _candidates.Count
-            ? null
-            : _candidates[_candidateIndex];
 
     public void Dispose()
     {
         _debounceTimer.Stop();
         _renderCts?.Cancel();
         _renderCts?.Dispose();
-    }
-
-    private void RebuildCandidates(PreviewRequest request)
-    {
-        if (request.Mode == "manual")
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(request.InputFolder) || !Directory.Exists(request.InputFolder))
-        {
-            _candidates = Array.Empty<PreviewCandidate>();
-            return;
-        }
-
-        if (request.Mode == "combo")
-        {
-            _candidates = LayoutContracts.ListComboSequences(request.InputFolder)
-                .Select(seq => new PreviewCandidate(seq.Paths, seq.LayoutName, seq.Borderless))
-                .ToList();
-            return;
-        }
-
-        IReadOnlyList<IReadOnlyList<string>> paths = LayoutContracts.ListLayoutCandidates(
-            request.InputFolder,
-            request.Layout,
-            request.Count,
-            request.Mode == "batch",
-            request.Mode == "random",
-            request.Borderless);
-
-        _candidates = paths
-            .Select(p => new PreviewCandidate(p, request.Layout, request.Borderless))
-            .ToList();
     }
 
     private async Task RenderCurrentAsync()
@@ -235,91 +181,40 @@ internal sealed class PreviewStageService : IDisposable
             return;
         }
 
-        if (request.Mode == "manual")
-        {
-            await RenderManualAsync(request).ConfigureAwait(true);
-            return;
-        }
-
         _renderCts?.Cancel();
         _renderCts?.Dispose();
         var cts = new CancellationTokenSource();
         _renderCts = cts;
         CancellationToken token = cts.Token;
 
-        if (_candidates.Count == 0)
+        EditableCollage? collage = request.FocusedCollage;
+        if (collage is null)
         {
             PublishEmpty(BuildEmptyMessage(request));
             return;
         }
 
-        PreviewCandidate candidate = _candidates[_candidateIndex];
-        string navLabel = $"{_candidateIndex + 1} / {_candidates.Count}";
-        bool canPrev = _candidateIndex > 0;
-        bool canNext = _candidateIndex < _candidates.Count - 1;
-        bool canUseManual = request.Mode != "manual";
-
-        try
+        int filled = collage.Slots.Count(s => s is not null);
+        if (request.Mode == "manual" && filled == 0)
         {
-            BitmapBuffer buffer = await Task.Run(() =>
-            {
-                token.ThrowIfCancellationRequested();
-                using NetVips.Image preview = LayoutContracts.RenderPreview(
-                    candidate.Paths,
-                    candidate.LayoutName,
-                    candidate.Borderless,
-                    request.Color,
-                    request.Bleed,
-                    null,
-                    PreviewLongEdge);
-                return VipsBitmapConverter.ImageToBuffer(preview);
-            }, token).ConfigureAwait(true);
-
-            if (token.IsCancellationRequested)
-            {
-                return;
-            }
-
-            WriteableBitmap bitmap = VipsBitmapConverter.BufferToWriteableBitmap(buffer);
-            Publish(new PreviewStageState
-            {
-                Bitmap = bitmap,
-                NavLabel = navLabel,
-                CanPrev = canPrev,
-                CanNext = canNext,
-                CanUseManual = canUseManual,
-                IsEmpty = false,
-                CurrentCandidate = candidate,
-            });
-        }
-        catch (OperationCanceledException)
-        {
-            // Superseded by a newer preview request.
-        }
-        catch (Exception ex)
-        {
-            FileLogger.Warning($"Preview render failed: {ex.Message}");
-            PublishEmpty($"Preview failed: {ex.Message}");
-        }
-    }
-
-    private async Task RenderManualAsync(PreviewRequest request)
-    {
-        _renderCts?.Cancel();
-        _renderCts?.Dispose();
-        var cts = new CancellationTokenSource();
-        _renderCts = cts;
-        CancellationToken token = cts.Token;
-
-        IReadOnlyList<SlotAssignment?> slots = request.ManualSlots ?? Array.Empty<SlotAssignment?>();
-        int filled = slots.Count(s => s is not null);
-        if (slots.Count == 0 || filled == 0)
-        {
-            PublishEmpty(BuildManualEmptyMessage(request));
+            PublishEmpty(BuildManualEmptyMessage(collage));
             return;
         }
 
-        string navLabel = $"Manual · {filled}/{slots.Count} filled";
+        if (collage.Slots.Count == 0)
+        {
+            PublishEmpty(BuildEmptyMessage(request));
+            return;
+        }
+
+        int focusIndex = Math.Clamp(_focusIndex, 0, Math.Max(0, request.FocusCount - 1));
+        string navLabel = request.Mode == "manual"
+            ? $"Blank · {filled}/{collage.Slots.Count} filled"
+            : request.FocusCount > 1
+                ? $"{focusIndex + 1} / {request.FocusCount}"
+                : collage.Layout;
+        bool canPrev = request.Mode != "manual" && focusIndex > 0;
+        bool canNext = request.Mode != "manual" && focusIndex < request.FocusCount - 1;
 
         try
         {
@@ -328,11 +223,11 @@ internal sealed class PreviewStageService : IDisposable
             {
                 token.ThrowIfCancellationRequested();
                 using NetVips.Image preview = LayoutContracts.RenderManualPreview(
-                    request.ManualLayout,
-                    request.Borderless,
+                    collage.Layout,
+                    collage.Borderless,
                     request.Color,
                     request.Bleed,
-                    slots,
+                    collage.Slots,
                     PreviewLongEdge,
                     live?.LivePanSlot,
                     live?.LivePanX,
@@ -350,37 +245,43 @@ internal sealed class PreviewStageService : IDisposable
             {
                 Bitmap = bitmap,
                 NavLabel = navLabel,
-                CanPrev = false,
-                CanNext = false,
-                CanUseManual = false,
+                CanPrev = canPrev,
+                CanNext = canNext,
                 IsEmpty = false,
             });
         }
         catch (OperationCanceledException)
         {
-            // Superseded.
+            // Superseded by a newer preview request.
         }
         catch (Exception ex)
         {
-            FileLogger.Warning($"Manual preview render failed: {ex.Message}");
+            FileLogger.Warning($"Preview render failed: {ex.Message}");
             PublishEmpty($"Preview failed: {ex.Message}");
         }
     }
 
     private static string BuildEmptyMessage(PreviewRequest request)
     {
+        if (request.Mode == "manual")
+        {
+            return BuildManualEmptyMessage(null);
+        }
+
         if (string.IsNullOrWhiteSpace(request.InputFolder) || !Directory.Exists(request.InputFolder))
         {
             return "Choose an input folder to preview collages.";
         }
 
-        return "Not enough photos of the required orientation for this layout and mode.";
+        return "Not enough matching photos for this layout and mode.";
     }
 
-    private static string BuildManualEmptyMessage(PreviewRequest request)
+    private static string BuildManualEmptyMessage(EditableCollage? collage)
     {
-        int required = LayoutCatalog.GetRequired(request.ManualLayout).NumImages;
-        return $"Manual mode: fill {required} slot(s).\nDrag or click thumbnails onto the stage.";
+        int required = collage is null
+            ? LayoutCatalog.GetRequired("stack-3").NumImages
+            : collage.Slots.Count;
+        return $"Blank collage: fill {required} slot(s).\nDrag or click thumbnails onto the stage.";
     }
 
     private void PublishEmpty(string message)
@@ -390,7 +291,6 @@ internal sealed class PreviewStageService : IDisposable
             NavLabel = "—",
             CanPrev = false,
             CanNext = false,
-            CanUseManual = false,
             IsEmpty = true,
             EmptyMessage = message,
         });
@@ -407,5 +307,6 @@ internal sealed record PreviewRequest(
     bool Borderless,
     bool Bleed,
     string Color,
-    string ManualLayout,
-    IReadOnlyList<SlotAssignment?>? ManualSlots);
+    EditableCollage? FocusedCollage,
+    int FocusIndex,
+    int FocusCount);

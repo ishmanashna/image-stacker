@@ -50,17 +50,10 @@ public static class CollageExporter
                 flipH = slots[i].FlipH;
                 grayscale = slots[i].Grayscale;
             }
-            else if (layoutName.Equals("grid-1x2-v", StringComparison.OrdinalIgnoreCase))
-            {
-                panX = i == 0 ? -1.0 : 1.0;
-                panY = 0.0;
-                flipH = false;
-                grayscale = false;
-            }
             else
             {
-                panX = 0.0;
-                panY = 0.0;
+                panX = CropDefaults.DefaultPanX(layoutName, i);
+                panY = CropDefaults.DefaultPanY(layoutName);
                 flipH = false;
                 grayscale = false;
             }
@@ -70,7 +63,6 @@ public static class CollageExporter
                 orderedPaths[i],
                 size.Width,
                 size.Height,
-                geometry.Orientation,
                 panX,
                 panY,
                 flipH,
@@ -79,7 +71,7 @@ public static class CollageExporter
             if (processed is null)
             {
                 throw new InvalidOperationException(
-                    $"Image unusable for this layout (orientation or read error): {orderedPaths[i]}");
+                    $"Image unusable (read error): {orderedPaths[i]}");
             }
 
             cells.Add(processed);
