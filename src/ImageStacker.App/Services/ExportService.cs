@@ -99,7 +99,8 @@ internal static class ExportService
       slots,
       outputPath,
       collage.Noise,
-      collage.Orton);
+      collage.Orton,
+      collage.ToCellEffectSettings());
   }
 
   public static string? ValidateCollage(EditableCollage collage, string? context = null)

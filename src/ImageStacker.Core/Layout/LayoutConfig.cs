@@ -1,4 +1,4 @@
-﻿namespace ImageStacker.Core.Layout;
+namespace ImageStacker.Core.Layout;
 
 public enum LayoutOrientation
 {

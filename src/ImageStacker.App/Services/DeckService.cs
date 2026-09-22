@@ -9,7 +9,7 @@ namespace ImageStacker.App.Services;
 
 internal sealed class DeckService : IDisposable
 {
-    private const int PreviewLongEdge = 480;
+    private const int PreviewLongEdge = 240;
     private const int MaxConcurrentPreviews = 2;
 
     private readonly Dispatcher _dispatcher;
@@ -225,8 +225,8 @@ internal sealed class DeckService : IDisposable
                     bleed,
                     card.Collage.Slots,
                     PreviewLongEdge,
-                    noise: card.Collage.Noise,
-                    orton: card.Collage.Orton);
+                    noise: false,
+                    orton: false);
                 BitmapBuffer buffer = VipsBitmapConverter.ImageToBuffer(preview);
 
                 if (token.IsCancellationRequested || generation != _previewGeneration)

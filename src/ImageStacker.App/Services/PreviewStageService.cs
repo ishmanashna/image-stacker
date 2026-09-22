@@ -2,8 +2,11 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using ImageStacker.App.Imaging;
 using ImageStacker.Core;
+using ImageStacker.Core.Color;
 using ImageStacker.Core.Contracts;
+using ImageStacker.Core.Imaging;
 using ImageStacker.Core.Layout;
+using ImageStacker.Core.Preview;
 using NetVips;
 
 namespace ImageStacker.App.Services;
@@ -39,6 +42,9 @@ internal sealed class PreviewStageService : IDisposable
     private PreviewRequest? _pendingRequest;
     private ManualLiveOverrides? _manualLive;
     private bool _fastDebounce;
+    private readonly object _dryCacheLock = new();
+    private DryPreviewCacheKey? _dryCacheKey;
+    private Image? _dryCacheImage;
 
     public PreviewStageService(Dispatcher dispatcher)
     {
@@ -113,6 +119,12 @@ internal sealed class PreviewStageService : IDisposable
         _debounceTimer.Start();
     }
 
+    public void ScheduleEffectRefresh(PreviewRequest request)
+    {
+        _pendingRequest = request;
+        SchedulePanRefresh();
+    }
+
     public void ClearManualLivePan()
     {
         _manualLive = null;
@@ -171,6 +183,7 @@ internal sealed class PreviewStageService : IDisposable
         _debounceTimer.Stop();
         _renderCts?.Cancel();
         _renderCts?.Dispose();
+        ClearDryCache();
     }
 
     private async Task RenderCurrentAsync()
@@ -219,21 +232,16 @@ internal sealed class PreviewStageService : IDisposable
         try
         {
             ManualLiveOverrides? live = _manualLive;
+            DryPreviewCacheKey cacheKey = BuildDryCacheKey(request, collage, live);
             BitmapBuffer buffer = await Task.Run(() =>
             {
                 token.ThrowIfCancellationRequested();
-                using NetVips.Image preview = LayoutContracts.RenderManualPreview(
-                    collage.Layout,
-                    collage.Borderless,
-                    request.Color,
-                    request.Bleed,
-                    collage.Slots,
-                    PreviewLongEdge,
-                    live?.LivePanSlot,
-                    live?.LivePanX,
-                    live?.LivePanY,
-                    request.Noise,
-                    request.Orton);
+                using NetVips.Image preview = RenderStagePreview(
+                    request,
+                    collage,
+                    live,
+                    cacheKey,
+                    token);
                 return VipsBitmapConverter.ImageToBuffer(preview);
             }, token).ConfigureAwait(true);
 
@@ -299,6 +307,160 @@ internal sealed class PreviewStageService : IDisposable
     }
 
     private void Publish(PreviewStageState state) => StageUpdated?.Invoke(state);
+
+    private NetVips.Image RenderStagePreview(
+        PreviewRequest request,
+        EditableCollage collage,
+        ManualLiveOverrides? live,
+        DryPreviewCacheKey cacheKey,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+
+        NetVips.Image? cachedDryCopy = null;
+        lock (_dryCacheLock)
+        {
+            if (_dryCacheKey == cacheKey && _dryCacheImage is not null)
+            {
+                cachedDryCopy = _dryCacheImage.Copy();
+            }
+        }
+
+        if (cachedDryCopy is not null)
+        {
+            using (cachedDryCopy)
+            {
+                return ApplyStageEffects(cachedDryCopy, request, collage);
+            }
+        }
+
+        using var dryCompose = LayoutContracts.RenderManualPreview(
+            collage.Layout,
+            collage.Borderless,
+            request.Color,
+            request.Bleed,
+            collage.Slots,
+            PreviewLongEdge,
+            live?.LivePanSlot,
+            live?.LivePanX,
+            live?.LivePanY,
+            noise: false,
+            orton: false);
+
+        token.ThrowIfCancellationRequested();
+        if (!token.IsCancellationRequested)
+        {
+            UpdateDryCache(cacheKey, dryCompose);
+        }
+
+        return ApplyStageEffects(dryCompose, request, collage);
+    }
+
+    private NetVips.Image ApplyStageEffects(
+        NetVips.Image dryRgb,
+        PreviewRequest request,
+        EditableCollage collage)
+    {
+        if (!request.Noise && !request.Orton)
+        {
+            return dryRgb.Copy();
+        }
+
+        CellEffectSettings settings = collage.ToCellEffectSettings().WithNormalizedOrtonMask();
+        Span<(byte R, byte G, byte B)> protect = stackalloc (byte, byte, byte)[2];
+        int protectCount = 0;
+        if (!collage.Borderless)
+        {
+            protect[protectCount++] = ColorParser.Parse(request.Color);
+        }
+
+        if (collage.Slots.Any(s => s is null || string.IsNullOrWhiteSpace(s.Path)))
+        {
+            protect[protectCount++] = CollagePreviewRenderer.ManualEmptySlotColor;
+        }
+
+        return CellPhotoEffects.ApplyToComposedPreview(
+            dryRgb,
+            settings,
+            protect[..protectCount]);
+    }
+
+    private void UpdateDryCache(DryPreviewCacheKey cacheKey, NetVips.Image dryCompose)
+    {
+        lock (_dryCacheLock)
+        {
+            _dryCacheImage?.Dispose();
+            _dryCacheImage = dryCompose.Copy();
+            _dryCacheKey = cacheKey;
+        }
+    }
+
+    private void ClearDryCache()
+    {
+        lock (_dryCacheLock)
+        {
+            _dryCacheImage?.Dispose();
+            _dryCacheImage = null;
+            _dryCacheKey = null;
+        }
+    }
+
+    private static DryPreviewCacheKey BuildDryCacheKey(
+        PreviewRequest request,
+        EditableCollage collage,
+        ManualLiveOverrides? live)
+    {
+        var slotSnapshots = new SlotSnapshot[collage.Slots.Count];
+        for (int i = 0; i < collage.Slots.Count; i++)
+        {
+            SlotAssignment? slot = collage.Slots[i];
+            double panX = slot?.PanX ?? 0;
+            double panY = slot?.PanY ?? 0;
+            if (live?.LivePanSlot == i)
+            {
+                panX = live.LivePanX;
+                panY = live.LivePanY;
+            }
+
+            slotSnapshots[i] = new SlotSnapshot(
+                slot?.Path,
+                panX,
+                panY,
+                slot?.FlipH ?? false,
+                slot?.Grayscale ?? false);
+        }
+
+        return new DryPreviewCacheKey(
+            collage,
+            collage.Layout,
+            collage.Borderless,
+            request.Color,
+            request.Bleed,
+            PreviewLongEdge,
+            live?.LivePanSlot,
+            live?.LivePanX ?? 0,
+            live?.LivePanY ?? 0,
+            slotSnapshots);
+    }
+
+    private sealed record DryPreviewCacheKey(
+        EditableCollage Collage,
+        string Layout,
+        bool Borderless,
+        string Color,
+        bool Bleed,
+        int PreviewLongEdge,
+        int? LivePanSlot,
+        double LivePanX,
+        double LivePanY,
+        SlotSnapshot[] Slots);
+
+    private readonly record struct SlotSnapshot(
+        string? Path,
+        double PanX,
+        double PanY,
+        bool FlipH,
+        bool Grayscale);
 }
 
 internal sealed record PreviewRequest(

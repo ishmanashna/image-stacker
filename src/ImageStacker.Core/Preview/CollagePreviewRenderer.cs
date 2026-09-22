@@ -8,6 +8,9 @@ namespace ImageStacker.Core.Preview;
 
 public static class CollagePreviewRenderer
 {
+    /// <summary>Fill for unfilled manual slots in preview compose (must stay effect-free on stage fast path).</summary>
+    public static readonly (byte R, byte G, byte B) ManualEmptySlotColor = (48, 48, 48);
+
     public static NetVips.Image Render(
         IReadOnlyList<string> orderedPaths,
         string layoutName,
@@ -17,7 +20,8 @@ public static class CollagePreviewRenderer
         IReadOnlyList<SlotAssignment>? slots = null,
         int previewLongEdge = 1000,
         bool noise = false,
-        bool orton = false)
+        bool orton = false,
+        CellEffectSettings? cellEffects = null)
     {
         LayoutGeometry geometry = LayoutGeometryCalculator.Compute(layoutName, borderless, bleed, orderedPaths);
         if (orderedPaths.Count != geometry.NumImages)
@@ -38,6 +42,7 @@ public static class CollagePreviewRenderer
         ScaleGeometrySeamless(geometry, scale, canvasW, canvasH, out var scaledPositions, out var scaledCellSizes);
 
         var canvasColor = ColorParser.Parse(color);
+        CellEffectSettings effects = CellEffectSettings.Resolve(noise, orton, cellEffects);
         using var cells = new DisposableList<NetVips.Image>();
 
         for (int i = 0; i < geometry.NumImages; i++)
@@ -78,18 +83,17 @@ public static class CollagePreviewRenderer
                     $"Image unusable (read error): {orderedPaths[i]}");
             }
 
+            if (effects.Noise || effects.Orton)
+            {
+                using var dry = processed;
+                processed = CellPhotoEffects.ApplyToCell(dry, effects);
+            }
+
             cells.Add(processed);
         }
 
-        NetVips.Image result = CollageExporter.ComposeCanvas(
+        return CollageExporter.ComposeCanvas(
             cells, canvasColor, scaledPositions, canvasW, canvasH);
-        if (noise || orton)
-        {
-            using var composed = result;
-            result = PostComposeEffects.Apply(composed, noise, orton);
-        }
-
-        return result;
     }
 
     public static NetVips.Image RenderManual(
@@ -103,7 +107,8 @@ public static class CollagePreviewRenderer
         double? livePanX = null,
         double? livePanY = null,
         bool noise = false,
-        bool orton = false)
+        bool orton = false,
+        CellEffectSettings? cellEffects = null)
     {
         IReadOnlyList<string>? canvasPaths = ResolveCanvasPathsForManual(layoutName, slots);
         LayoutGeometry geometry = LayoutGeometryCalculator.Compute(layoutName, borderless, bleed, canvasPaths);
@@ -119,6 +124,7 @@ public static class CollagePreviewRenderer
         ScaleGeometrySeamless(geometry, scale, canvasW, canvasH, out var scaledPositions, out var scaledCellSizes);
 
         var canvasColor = ColorParser.Parse(color);
+        CellEffectSettings effects = CellEffectSettings.Resolve(noise, orton, cellEffects);
         using var cells = new DisposableList<NetVips.Image>();
 
         for (int i = 0; i < geometry.NumImages; i++)
@@ -154,18 +160,17 @@ public static class CollagePreviewRenderer
                 continue;
             }
 
+            if (effects.Noise || effects.Orton)
+            {
+                using var dry = processed;
+                processed = CellPhotoEffects.ApplyToCell(dry, effects);
+            }
+
             cells.Add(processed);
         }
 
-        NetVips.Image result = CollageExporter.ComposeCanvas(
+        return CollageExporter.ComposeCanvas(
             cells, canvasColor, scaledPositions, canvasW, canvasH);
-        if (noise || orton)
-        {
-            using var composed = result;
-            result = PostComposeEffects.Apply(composed, noise, orton);
-        }
-
-        return result;
     }
 
     private static IReadOnlyList<string>? ResolveCanvasPathsForManual(
@@ -190,8 +195,9 @@ public static class CollagePreviewRenderer
 
     private static NetVips.Image CreateEmptySlotCell(int width, int height)
     {
+        (byte r, byte g, byte b) = ManualEmptySlotColor;
         return NetVips.Image.Black(width, height)
-            .NewFromImage(new double[] { 48, 48, 48 })
+            .NewFromImage(new double[] { r, g, b })
             .Cast(Enums.BandFormat.Uchar)
             .Copy(interpretation: Enums.Interpretation.Srgb);
     }

@@ -139,7 +139,7 @@ public class CanvasTests
     }
 
     [Fact]
-    public void Stack1LandscapePhotoUses4800x3840Canvas()
+    public void Stack1LandscapePhotoUses4800x3200Canvas()
     {
         string temp = CreateTempDir();
         try
@@ -147,15 +147,15 @@ public class CanvasTests
             string landscape = SyntheticImages.CreateLandscapeJpeg(temp);
             var paths = new List<string> { landscape };
             LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-1", borderless: false, paths: paths);
-            Assert.Equal(4800, geom.CanvasWidth);
-            Assert.Equal(3840, geom.CanvasHeight);
+            Assert.Equal(Constants.LandscapeCanvasWidth, geom.CanvasWidth);
+            Assert.Equal(Constants.LandscapeCanvasHeight, geom.CanvasHeight);
 
             string output = Path.Combine(temp, "out.jpg");
             CollageExporter.ExportCollage(paths, "stack-1", borderless: false, color: "white", output);
 
             using var result = Image.NewFromFile(output);
-            Assert.Equal(4800, result.Width);
-            Assert.Equal(3840, result.Height);
+            Assert.Equal(Constants.LandscapeCanvasWidth, result.Width);
+            Assert.Equal(Constants.LandscapeCanvasHeight, result.Height);
         }
         finally
         {
@@ -204,7 +204,7 @@ public class CanvasTests
     }
 
     [Fact]
-    public void ExportGrid2x2HProduces4800x3840Canvas()
+    public void ExportGrid2x2HProduces4800x3200Canvas()
     {
         string temp = CreateTempDir();
         try
@@ -218,8 +218,8 @@ public class CanvasTests
 
             var paths = Directory.GetFiles(folder).OrderBy(p => p, StringComparer.Ordinal).Take(4).ToList();
             LayoutGeometry geom = LayoutGeometryCalculator.Compute("grid-2x2-h", borderless: false);
-            Assert.Equal(4800, geom.CanvasWidth);
-            Assert.Equal(3840, geom.CanvasHeight);
+            Assert.Equal(Constants.LandscapeCanvasWidth, geom.CanvasWidth);
+            Assert.Equal(Constants.LandscapeCanvasHeight, geom.CanvasHeight);
 
             string output = Path.Combine(temp, "out.jpg");
             CollageExporter.ExportCollage(paths, "grid-2x2-h", borderless: false, color: "white", output);
@@ -415,8 +415,8 @@ public class LayoutGeometryTests
         Assert.Equal(LayoutOrientation.Horizontal, def.Orientation);
 
         LayoutGeometry framed = LayoutGeometryCalculator.Compute("grid-2x2-h", borderless: false);
-        Assert.Equal(4800, framed.CanvasWidth);
-        Assert.Equal(3840, framed.CanvasHeight);
+        Assert.Equal(Constants.LandscapeCanvasWidth, framed.CanvasWidth);
+        Assert.Equal(Constants.LandscapeCanvasHeight, framed.CanvasHeight);
         Assert.Equal(4, framed.Positions.Count);
         Assert.All(framed.Positions, p =>
         {
@@ -507,6 +507,39 @@ public class CoverMathTests
             using var flattened = ImagePipeline.FlattenAlpha(loaded);
             Assert.False(flattened.HasAlpha());
             Assert.Equal(3, flattened.Bands);
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public void Stack1Landscape32PhotoCoverUsesFullSourceWidth()
+    {
+        const int srcW = 4500;
+        const int srcH = 3000;
+        string temp = CreateTempDir();
+        try
+        {
+            string photo = SyntheticImages.CreateLandscapeJpeg(temp, srcW, srcH);
+            LayoutGeometry geom = LayoutGeometryCalculator.Compute(
+                "stack-1",
+                borderless: false,
+                paths: new List<string> { photo });
+            int cellW = geom.CellSizes[0].Width;
+            int cellH = geom.CellSizes[0].Height;
+
+            (_, _, int cropW, int cropH) = CoverMath.ComputeCropRect(srcW, srcH, cellW, cellH, 0, 0);
+            Assert.Equal(srcW, cropW);
+            Assert.Equal(srcH, cropH);
+
+            using var cache = new SourceImageCache();
+            using var cell = ImagePipeline.ProcessImageForCell(
+                cache, photo, cellW, cellH, 0, 0, false, false);
+            Assert.NotNull(cell);
+            Assert.Equal(cellW, cell!.Width);
+            Assert.Equal(cellH, cell.Height);
         }
         finally
         {
@@ -760,10 +793,33 @@ public class LayoutCardCopyTests
     {
         LayoutDefinition stack1 = LayoutCatalog.GetRequired("stack-1");
         string card = LayoutCardCopy.BuildCardText("stack-1", stack1);
-        Assert.Contains("Stack 1", card);
-        Assert.Contains("in any", card);
-        Assert.Contains("out photo", card);
-        Assert.Contains($"1{Times}1", card);
+        string[] lines = card.Split('\n');
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("Stack 1", lines[0]);
+        Assert.Equal("in any → out photo", lines[1]);
+    }
+
+    [Fact]
+    public void Stack3CardIsTwoLinesWithInOut()
+    {
+        LayoutDefinition stack3 = LayoutCatalog.GetRequired("stack-3");
+        string card = LayoutCardCopy.BuildCardText("stack-3", stack3);
+        string[] lines = card.Split('\n');
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("Stack 3", lines[0]);
+        Assert.Equal("in H → out V", lines[1]);
+    }
+
+    [Fact]
+    public void Grid2x4CardHasNoStandaloneAxBLine()
+    {
+        LayoutDefinition grid24 = LayoutCatalog.GetRequired("grid-2x4");
+        string card = LayoutCardCopy.BuildCardText("grid-2x4", grid24);
+        string[] lines = card.Split('\n');
+        Assert.Equal(2, lines.Length);
+        Assert.Equal($"Grid 2{Times}4", lines[0]);
+        Assert.DoesNotContain($"2{Times}4", lines[1]);
+        Assert.False(string.Equals(lines[1], $"2{Times}4", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -815,7 +871,7 @@ public class ThumbChromaClassifierTests
     }
 }
 
-public class PostComposeEffectsTests
+public class CellPhotoEffectsTests
 {
     [Fact]
     public void NoiseChangesPixelsComparedToDryExport()
@@ -828,13 +884,15 @@ public class PostComposeEffectsTests
 
         Assert.Equal(dry.Width, withNoise.Width);
         Assert.Equal(dry.Height, withNoise.Height);
-        Assert.True(MeanAbsoluteDifference(dry, withNoise) > 0.5);
+        LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-3", borderless: false);
+        CellRect cell = geom.Positions[0];
+        Assert.True(MeanAbsoluteDifferenceInRect(dry, withNoise, cell.X, cell.Y, cell.X + cell.Width, cell.Y + cell.Height) > 0.1);
     }
 
     [Fact]
     public void OrtonChangesPixelsComparedToDryExport()
     {
-        var paths = CreateStack3Paths();
+        var paths = CreateStack3Paths(useHighlightSource: true);
         using var dry = CollageExporter.BuildCollageImage(
             paths, "stack-3", borderless: false, color: "white", noise: false, orton: false);
         using var withOrton = CollageExporter.BuildCollageImage(
@@ -842,7 +900,9 @@ public class PostComposeEffectsTests
 
         Assert.Equal(dry.Width, withOrton.Width);
         Assert.Equal(dry.Height, withOrton.Height);
-        Assert.True(MeanAbsoluteDifference(dry, withOrton) > 0.5);
+        LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-3", borderless: false);
+        CellRect cell = geom.Positions[0];
+        Assert.True(MeanAbsoluteDifferenceInRect(dry, withOrton, cell.X, cell.Y, cell.X + cell.Width, cell.Y + cell.Height) > 0.1);
     }
 
     [Fact]
@@ -875,17 +935,244 @@ public class PostComposeEffectsTests
         }
     }
 
-    private static List<string> CreateStack3Paths(string? tempRoot = null)
+    [Fact]
+    public void ApplyToComposedPreview_ProtectColorLeavesWhiteUnchangedAndAltersGray()
+    {
+        const int w = 64;
+        using var whiteBand = Image.Black(w, 32).NewFromImage(new double[] { 255, 255, 255 }).Cast(Enums.BandFormat.Uchar);
+        using var grayBand = Image.Black(w, 32).NewFromImage(new double[] { 128, 128, 128 }).Cast(Enums.BandFormat.Uchar);
+        using var composed = whiteBand.Join(grayBand, Enums.Direction.Vertical).Copy(interpretation: Enums.Interpretation.Srgb);
+
+        var settings = CellEffectSettings.FromFlags(noise: true, orton: false);
+        settings = settings with { NoiseSeed = 42 };
+        using var fx = CellPhotoEffects.ApplyToComposedPreview(composed, settings, (255, 255, 255));
+
+        Assert.Equal((255, 255, 255), GetRgbPixel(fx, 0, 0));
+        Assert.NotEqual((128, 128, 128), GetRgbPixel(fx, 0, 40));
+    }
+
+    [Fact]
+    public void FramedGutterCornerUnchangedWhenEffectsOn()
+    {
+        var paths = CreateGrid2x2VPaths();
+        using var dry = CollageExporter.BuildCollageImage(
+            paths, "grid-2x2-v", borderless: false, color: "white", noise: false, orton: false);
+        using var fx = CollageExporter.BuildCollageImage(
+            paths, "grid-2x2-v", borderless: false, color: "white", noise: true, orton: true);
+
+        Assert.Equal((255, 255, 255), GetRgbPixel(dry, 0, 0));
+        Assert.Equal((255, 255, 255), GetRgbPixel(fx, 0, 0));
+        LayoutGeometry geom = LayoutGeometryCalculator.Compute("grid-2x2-v", borderless: false);
+        CellRect cell = geom.Positions[0];
+        Assert.True(MeanAbsoluteDifferenceInRect(dry, fx, cell.X, cell.Y, cell.X + cell.Width, cell.Y + cell.Height) > 0.1);
+    }
+
+    [Fact]
+    public void BothEffectsOffMatchesDryExport()
+    {
+        var paths = CreateStack3Paths();
+        using var dry = CollageExporter.BuildCollageImage(
+            paths, "stack-3", borderless: false, color: "white", noise: false, orton: false);
+        using var again = CollageExporter.BuildCollageImage(
+            paths, "stack-3", borderless: false, color: "white", noise: false, orton: false);
+
+        Assert.True(MeanAbsoluteDifference(dry, again) < 0.01);
+    }
+
+    [Fact]
+    public void OrtonLeavesNearBlackPatchMeanNearlyUnchanged()
+    {
+        using var dry = CreateOrtonTestCell();
+        using var withOrton = CellPhotoEffects.ApplyToCell(
+            dry,
+            new CellEffectSettings(Noise: false, Orton: true));
+
+        double dryMean = MeanRgbInRect(dry, 40, 40, 120, 120);
+        double ortonMean = MeanRgbInRect(withOrton, 40, 40, 120, 120);
+        Assert.True(Math.Abs(ortonMean - dryMean) <= 2.5);
+    }
+
+    [Fact]
+    public void OrtonAddsGlowToBrightPatch()
+    {
+        using var dry = CreateOrtonTestCell();
+        using var withOrton = CellPhotoEffects.ApplyToCell(
+            dry,
+            new CellEffectSettings(Noise: false, Orton: true));
+
+        double brightMad = MeanAbsoluteDifferenceInRect(dry, withOrton, 140, 40, 220, 120);
+        Assert.True(brightMad > 0.05);
+    }
+
+    [Fact]
+    public void NoiseShadowsWeightChangesDarkMoreThanHighlights()
+    {
+        using var dry = CreateNoiseToneTestCell();
+        var shadowsOnly = new CellEffectSettings(
+            Noise: true,
+            Orton: false,
+            NoiseAmount: 0.25,
+            NoiseShadows: 1.0,
+            NoiseHighlights: 0.0,
+            NoiseSeed: 42);
+        var highlightsOnly = shadowsOnly with { NoiseShadows = 0.0, NoiseHighlights = 1.0 };
+
+        using var shadowFx = CellPhotoEffects.ApplyToCell(dry, shadowsOnly);
+        using var highlightFx = CellPhotoEffects.ApplyToCell(dry, highlightsOnly);
+
+        double darkShadowMad = MeanAbsoluteDifferenceInRect(dry, shadowFx, 20, 80, 100, 160);
+        double darkHighlightMad = MeanAbsoluteDifferenceInRect(dry, highlightFx, 20, 80, 100, 160);
+        double lightShadowMad = MeanAbsoluteDifferenceInRect(dry, shadowFx, 140, 80, 220, 160);
+        double lightHighlightMad = MeanAbsoluteDifferenceInRect(dry, highlightFx, 140, 80, 220, 160);
+
+        Assert.True(darkShadowMad > lightShadowMad);
+        Assert.True(lightHighlightMad > darkHighlightMad);
+    }
+
+    [Fact]
+    public void NoiseBothShadowsAndHighlightsChangeBothTones()
+    {
+        using var dry = CreateNoiseToneTestCell();
+        var both = new CellEffectSettings(
+            Noise: true,
+            Orton: false,
+            NoiseAmount: 0.25,
+            NoiseShadows: 1.0,
+            NoiseHighlights: 1.0,
+            NoiseSeed: 7);
+
+        using var fx = CellPhotoEffects.ApplyToCell(dry, both);
+        double darkMad = MeanAbsoluteDifferenceInRect(dry, fx, 20, 80, 100, 160);
+        double lightMad = MeanAbsoluteDifferenceInRect(dry, fx, 140, 80, 220, 160);
+        Assert.True(darkMad > 0.5);
+        Assert.True(lightMad > 0.5);
+    }
+
+    [Fact]
+    public void DifferentOrtonAmountsChangeBrightRegion()
+    {
+        using var dry = CreateOrtonTestCell();
+        using var low = CellPhotoEffects.ApplyToCell(
+            dry,
+            new CellEffectSettings(Noise: false, Orton: true, OrtonAmount: 0.10));
+        using var high = CellPhotoEffects.ApplyToCell(
+            dry,
+            new CellEffectSettings(Noise: false, Orton: true, OrtonAmount: 0.45));
+
+        double lowBright = MeanRgbInRect(low, 140, 40, 220, 120);
+        double highBright = MeanRgbInRect(high, 140, 40, 220, 120);
+        Assert.True(Math.Abs(highBright - lowBright) > 0.5);
+    }
+
+    [Fact]
+    public void DifferentNoiseAmountsChangePixels()
+    {
+        using var dry = CreateNoiseToneTestCell();
+        var lowSettings = new CellEffectSettings(
+            Noise: true,
+            Orton: false,
+            NoiseAmount: 0.04,
+            NoiseSeed: 99);
+        var highSettings = lowSettings with { NoiseAmount = 0.20 };
+
+        using var low = CellPhotoEffects.ApplyToCell(dry, lowSettings);
+        using var high = CellPhotoEffects.ApplyToCell(dry, highSettings);
+
+        Assert.True(MeanAbsoluteDifference(low, high) > 0.5);
+    }
+
+    private static Image CreateOrtonTestCell()
+    {
+        const int size = 256;
+        using var gray = Image.Black(size, size).NewFromImage(new double[] { 80, 80, 80 }).Cast(Enums.BandFormat.Uchar);
+        using var dark = Image.Black(80, 80).NewFromImage(new double[] { 0, 0, 0 }).Cast(Enums.BandFormat.Uchar);
+        using var brightLeft = Image.Black(40, 80).NewFromImage(new double[] { 190, 190, 190 }).Cast(Enums.BandFormat.Uchar);
+        using var brightRight = Image.Black(40, 80).NewFromImage(new double[] { 230, 230, 230 }).Cast(Enums.BandFormat.Uchar);
+        using var bright = brightLeft.Join(brightRight, Enums.Direction.Horizontal);
+        using var withDark = gray.Insert(dark, 40, 40);
+        return withDark.Insert(bright, 140, 40).Copy(interpretation: Enums.Interpretation.Srgb);
+    }
+
+    private static Image CreateNoiseToneTestCell()
+    {
+        const int w = 256;
+        const int h = 200;
+        using var dark = Image.Black(w / 2, h).NewFromImage(new double[] { 40, 40, 40 }).Cast(Enums.BandFormat.Uchar);
+        using var light = Image.Black(w / 2, h).NewFromImage(new double[] { 230, 230, 230 }).Cast(Enums.BandFormat.Uchar);
+        return dark.Join(light, Enums.Direction.Horizontal).Copy(interpretation: Enums.Interpretation.Srgb);
+    }
+
+    private static List<string> CreateGrid2x2VPaths(string? tempRoot = null)
     {
         string temp = tempRoot ?? CreateTempDir();
         string folder = Path.Combine(temp, "photos");
         Directory.CreateDirectory(folder);
+        for (int i = 0; i < 4; i++)
+        {
+            File.Copy(SyntheticImages.CreatePortraitJpeg(temp), Path.Combine(folder, $"img_{i:00}.jpg"));
+        }
+
+        return Directory.GetFiles(folder).OrderBy(p => p, StringComparer.Ordinal).Take(4).ToList();
+    }
+
+    private static List<string> CreateStack3Paths(string? tempRoot = null, bool useHighlightSource = false)
+    {
+        string temp = tempRoot ?? CreateTempDir();
+        string folder = Path.Combine(temp, "photos");
+        Directory.CreateDirectory(folder);
+        string source = useHighlightSource
+            ? CreateLandscapeWithBrightTop(temp)
+            : SyntheticImages.CreateLandscapeJpeg(temp);
         for (int i = 0; i < 3; i++)
         {
-            File.Copy(SyntheticImages.CreateLandscapeJpeg(temp), Path.Combine(folder, $"img_{i:00}.jpg"));
+            File.Copy(source, Path.Combine(folder, $"img_{i:00}.jpg"));
         }
 
         return Directory.GetFiles(folder).OrderBy(p => p, StringComparer.Ordinal).Take(3).ToList();
+    }
+
+    private static string CreateLandscapeWithBrightTop(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "landscape_bright_top.jpg");
+        const int width = 4000;
+        const int height = 3000;
+        int split = height / 2;
+        using var top = Image.Black(width, split).NewFromImage(new double[] { 250, 250, 250 }).Cast(Enums.BandFormat.Uchar);
+        using var bottom = Image.Black(width, height - split).NewFromImage(new double[] { 40, 60, 90 }).Cast(Enums.BandFormat.Uchar);
+        using var rgb = top.Join(bottom, Enums.Direction.Vertical);
+        rgb.Jpegsave(path, q: 90);
+        return path;
+    }
+
+    private static (byte R, byte G, byte B) GetRgbPixel(Image image, int x, int y)
+    {
+        double[] rgb = image.Getpoint(x, y);
+        return ((byte)Math.Round(rgb[0]), (byte)Math.Round(rgb[1]), (byte)Math.Round(rgb[2]));
+    }
+
+    private static double PixelDistance(Image a, Image b, int x, int y)
+    {
+        var pa = GetRgbPixel(a, x, y);
+        var pb = GetRgbPixel(b, x, y);
+        return (Math.Abs(pa.R - pb.R) + Math.Abs(pa.G - pb.G) + Math.Abs(pa.B - pb.B)) / 3.0;
+    }
+
+    private static double MeanRgbInRect(Image image, int x0, int y0, int x1, int y1)
+    {
+        int w = Math.Max(1, x1 - x0);
+        int h = Math.Max(1, y1 - y0);
+        using var crop = image.Crop(x0, y0, w, h);
+        return crop.Avg();
+    }
+
+    private static double MeanAbsoluteDifferenceInRect(Image a, Image b, int x0, int y0, int x1, int y1)
+    {
+        int w = Math.Max(1, x1 - x0);
+        int h = Math.Max(1, y1 - y0);
+        using var ca = a.Crop(x0, y0, w, h);
+        using var cb = b.Crop(x0, y0, w, h);
+        return MeanAbsoluteDifference(ca, cb);
     }
 
     private static double MeanAbsoluteDifference(Image a, Image b)

@@ -11,7 +11,8 @@ public sealed record ExportJob(
     IReadOnlyList<SlotAssignment>? Slots = null,
     string? OutputPath = null,
     bool Noise = false,
-    bool Orton = false);
+    bool Orton = false,
+    CellEffectSettings? CellEffects = null);
 
 public sealed record ExportJobResult(int Succeeded, int Failed, int Total);
 
@@ -66,7 +67,8 @@ public static class ExportJobRunner
                             job.Slots,
                             cache,
                             job.Noise,
-                            job.Orton);
+                            job.Orton,
+                            job.CellEffects);
 
                         Interlocked.Increment(ref succeeded);
                         onSuccess?.Invoke(outputPath);
@@ -83,5 +85,6 @@ public static class ExportJobRunner
             NetVips.NetVips.Concurrency = previousConcurrency;
         }
 
-        return new ExportJobResult(succeeded, failed, jobs.Count);    }
+        return new ExportJobResult(succeeded, failed, jobs.Count);
+    }
 }

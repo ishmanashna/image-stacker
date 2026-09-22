@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
@@ -27,6 +28,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, Button> _layoutButtons = new(StringComparer.OrdinalIgnoreCase);
     private bool _busy;
     private bool _suppressUiEvents = true; // true until ctor finishes (XAML Checked/TextChanged fire early)
+    private bool _suppressKnobEvents;
+    private bool _effectKnobDragUndoDone;
     private bool _uiReady;
     private string? _lastRunOutputDir;
 
@@ -283,6 +286,7 @@ public partial class MainWindow : Window
                 string.Equals(value, color, StringComparison.OrdinalIgnoreCase))
             {
                 ColorCombo.SelectedItem = comboItem;
+                ColorCombo.Text = comboItem.Content?.ToString() ?? value;
                 _customColor = null;
                 return;
             }
@@ -539,6 +543,7 @@ public partial class MainWindow : Window
         bool canEditEffects = enableEditing && GetFocusedCollage() is not null;
         NoiseCheck.IsEnabled = canEditEffects;
         OrtonCheck.IsEnabled = canEditEffects;
+        UpdateEffectKnobEnableState(canEditEffects);
         CountBox.IsEnabled = enableEditing && mode is "single" or "random";
 
         PreviewPrevButton.IsEnabled = enableEditing && !manual;
@@ -616,14 +621,8 @@ public partial class MainWindow : Window
         collage.Noise = noise;
         collage.Orton = orton;
 
-        if (DeckPanel.Visibility == Visibility.Visible &&
-            _deckService.FocusIndex >= 0 &&
-            _deckService.FocusIndex < _deckService.Cards.Count)
-        {
-            _deckService.InvalidatePreviewForIndex(_deckService.FocusIndex);
-        }
-
-        ScheduleStageRefresh(immediate: true);
+        UpdateEffectKnobEnableState();
+        ScheduleEffectKnobRefresh();
     }
 
     private void ColorCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -633,7 +632,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (ColorCombo.SelectedItem is ComboBoxItem { Tag: string tag })
+        if (ColorCombo.SelectedItem is ComboBoxItem { Tag: string tag } item)
         {
             if (tag == "__custom__")
             {
@@ -642,7 +641,7 @@ public partial class MainWindow : Window
             }
 
             _customColor = null;
-            ColorCombo.Text = string.Empty;
+            ColorCombo.Text = item.Content?.ToString() ?? tag;
         }
 
         SchedulePreviewRefresh();
@@ -994,9 +993,19 @@ public partial class MainWindow : Window
     private void ScheduleStageRefresh(bool immediate = false)
     {
         EnsureStandaloneCollages();
-        SyncEffectTogglesFromFocusedCollage();
+        SyncEffectsFromFocusedCollage();
         int? deckFocus = DeckPanel.Visibility == Visibility.Visible ? _deckService.FocusIndex : null;
         _previewStage.ScheduleRefresh(BuildPreviewRequest(), immediate, deckFocus);
+    }
+
+    private void ScheduleEffectKnobRefresh()
+    {
+        if (_suppressUiEvents)
+        {
+            return;
+        }
+
+        _previewStage.ScheduleEffectRefresh(BuildPreviewRequest());
     }
 
     private IReadOnlyList<string> ResolveIncludedPathsForJobs()
@@ -1097,7 +1106,19 @@ public partial class MainWindow : Window
     }
 
     private static CollageUndoSnapshot CaptureUndoState(EditableCollage collage) =>
-        new(collage.Slots.ToList(), collage.Noise, collage.Orton);
+        new(
+            collage.Slots.ToList(),
+            collage.Noise,
+            collage.Orton,
+            collage.OrtonAmount,
+            collage.OrtonBlurPercent,
+            collage.OrtonMaskLow,
+            collage.OrtonMaskHigh,
+            collage.OrtonFeatherPercent,
+            collage.NoiseAmount,
+            collage.NoiseSize,
+            collage.NoiseShadows,
+            collage.NoiseHighlights);
 
     private void ApplyUndoSnapshot(EditableCollage collage, CollageUndoSnapshot snapshot)
     {
@@ -1105,25 +1126,359 @@ public partial class MainWindow : Window
         collage.Slots.AddRange(snapshot.Slots);
         collage.Noise = snapshot.Noise;
         collage.Orton = snapshot.Orton;
-        SyncEffectTogglesFromFocusedCollage();
+        collage.OrtonAmount = snapshot.OrtonAmount;
+        collage.OrtonBlurPercent = snapshot.OrtonBlurPercent;
+        collage.OrtonMaskLow = snapshot.OrtonMaskLow;
+        collage.OrtonMaskHigh = snapshot.OrtonMaskHigh;
+        collage.OrtonFeatherPercent = snapshot.OrtonFeatherPercent;
+        collage.NoiseAmount = snapshot.NoiseAmount;
+        collage.NoiseSize = snapshot.NoiseSize;
+        collage.NoiseShadows = snapshot.NoiseShadows;
+        collage.NoiseHighlights = snapshot.NoiseHighlights;
+        SyncEffectsFromFocusedCollage();
     }
 
-    private void SyncEffectTogglesFromFocusedCollage()
+    private void SyncEffectsFromFocusedCollage()
     {
         EditableCollage? collage = GetFocusedCollage();
         _suppressUiEvents = true;
+        _suppressKnobEvents = true;
         if (collage is null)
         {
             NoiseCheck.IsChecked = false;
             OrtonCheck.IsChecked = false;
+            PushEffectKnobValuesToUi(EditableCollage.Blank("stack-3", false));
         }
         else
         {
             NoiseCheck.IsChecked = collage.Noise;
             OrtonCheck.IsChecked = collage.Orton;
+            PushEffectKnobValuesToUi(collage);
         }
 
+        _suppressKnobEvents = false;
         _suppressUiEvents = false;
+        UpdateEffectKnobEnableState();
+    }
+
+    private void UpdateEffectKnobEnableState(bool? canEditEffects = null)
+    {
+        bool canEdit = canEditEffects ?? (GetFocusedCollage() is not null && !_busy);
+        bool ortonOn = OrtonCheck.IsChecked == true;
+        bool noiseOn = NoiseCheck.IsChecked == true;
+        OrtonKnobsPanel.IsEnabled = canEdit && ortonOn;
+        NoiseKnobsPanel.IsEnabled = canEdit && noiseOn;
+    }
+
+    private void PushEffectKnobValuesToUi(EditableCollage collage)
+    {
+        SetKnobUi("OrtonAmount", collage.OrtonAmount);
+        SetKnobUi("OrtonBlurPercent", collage.OrtonBlurPercent);
+        SetKnobUi("OrtonMaskLow", collage.OrtonMaskLow);
+        SetKnobUi("OrtonMaskHigh", collage.OrtonMaskHigh);
+        SetKnobUi("OrtonFeatherPercent", collage.OrtonFeatherPercent);
+        SetKnobUi("NoiseAmount", collage.NoiseAmount);
+        SetKnobUi("NoiseSize", collage.NoiseSize);
+        SetKnobUi("NoiseShadows", collage.NoiseShadows);
+        SetKnobUi("NoiseHighlights", collage.NoiseHighlights);
+    }
+
+    private void SetKnobUi(string key, double value)
+    {
+        foreach (Slider slider in FindKnobSliders(key))
+        {
+            slider.Value = value;
+        }
+
+        string text = FormatKnob(value);
+        foreach (TextBox box in FindKnobBoxes(key))
+        {
+            box.Text = text;
+        }
+    }
+
+    private IEnumerable<Slider> FindKnobSliders(string key)
+    {
+        if (OrtonKnobsPanel is null || NoiseKnobsPanel is null)
+        {
+            yield break;
+        }
+
+        foreach (Slider slider in OrtonKnobsPanel.Children.OfType<Grid>()
+                     .SelectMany(g => g.Children.OfType<Slider>()))
+        {
+            if (string.Equals(slider.Tag as string, key, StringComparison.Ordinal))
+            {
+                yield return slider;
+            }
+        }
+
+        foreach (Slider slider in NoiseKnobsPanel.Children.OfType<Grid>()
+                     .SelectMany(g => g.Children.OfType<Slider>()))
+        {
+            if (string.Equals(slider.Tag as string, key, StringComparison.Ordinal))
+            {
+                yield return slider;
+            }
+        }
+    }
+
+    private IEnumerable<TextBox> FindKnobBoxes(string key)
+    {
+        foreach (TextBox box in OrtonKnobsPanel.Children.OfType<Grid>()
+                     .SelectMany(g => g.Children.OfType<TextBox>()))
+        {
+            if (string.Equals(box.Tag as string, key, StringComparison.Ordinal))
+            {
+                yield return box;
+            }
+        }
+
+        foreach (TextBox box in NoiseKnobsPanel.Children.OfType<Grid>()
+                     .SelectMany(g => g.Children.OfType<TextBox>()))
+        {
+            if (string.Equals(box.Tag as string, key, StringComparison.Ordinal))
+            {
+                yield return box;
+            }
+        }
+    }
+
+    private static string FormatKnob(double value) =>
+        value.ToString("0.00", CultureInfo.InvariantCulture);
+
+    private static double RoundKnob(double value) =>
+        Math.Round(value, 2, MidpointRounding.AwayFromZero);
+
+    private static bool TryParseKnob(string text, out double value)
+    {
+        if (double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
+            double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.CurrentCulture, out value))
+        {
+            value = RoundKnob(value);
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryGetKnobRange(string key, out double min, out double max)
+    {
+        switch (key)
+        {
+            case "OrtonAmount":
+            case "OrtonMaskLow":
+            case "OrtonMaskHigh":
+            case "OrtonFeatherPercent":
+            case "NoiseAmount":
+            case "NoiseShadows":
+            case "NoiseHighlights":
+                min = 0;
+                max = 1;
+                return true;
+            case "OrtonBlurPercent":
+                min = 0.30;
+                max = 1.80;
+                return true;
+            case "NoiseSize":
+                min = 0.40;
+                max = 2.00;
+                return true;
+            default:
+                min = 0;
+                max = 1;
+                return false;
+        }
+    }
+
+    private static bool TryReadKnobFromCollage(EditableCollage collage, string key, out double value)
+    {
+        switch (key)
+        {
+            case "OrtonAmount":
+                value = collage.OrtonAmount;
+                return true;
+            case "OrtonBlurPercent":
+                value = collage.OrtonBlurPercent;
+                return true;
+            case "OrtonMaskLow":
+                value = collage.OrtonMaskLow;
+                return true;
+            case "OrtonMaskHigh":
+                value = collage.OrtonMaskHigh;
+                return true;
+            case "OrtonFeatherPercent":
+                value = collage.OrtonFeatherPercent;
+                return true;
+            case "NoiseAmount":
+                value = collage.NoiseAmount;
+                return true;
+            case "NoiseSize":
+                value = collage.NoiseSize;
+                return true;
+            case "NoiseShadows":
+                value = collage.NoiseShadows;
+                return true;
+            case "NoiseHighlights":
+                value = collage.NoiseHighlights;
+                return true;
+            default:
+                value = 0;
+                return false;
+        }
+    }
+
+    private static bool TryWriteKnobToCollage(EditableCollage collage, string key, double value)
+    {
+        if (!TryGetKnobRange(key, out double min, out double max))
+        {
+            return false;
+        }
+
+        value = Math.Clamp(RoundKnob(value), min, max);
+        if (TryReadKnobFromCollage(collage, key, out double current) && Math.Abs(current - value) < 0.0001)
+        {
+            return false;
+        }
+
+        switch (key)
+        {
+            case "OrtonAmount":
+                collage.OrtonAmount = value;
+                return true;
+            case "OrtonBlurPercent":
+                collage.OrtonBlurPercent = value;
+                return true;
+            case "OrtonMaskLow":
+                collage.OrtonMaskLow = value;
+                return true;
+            case "OrtonMaskHigh":
+                collage.OrtonMaskHigh = value;
+                return true;
+            case "OrtonFeatherPercent":
+                collage.OrtonFeatherPercent = value;
+                return true;
+            case "NoiseAmount":
+                collage.NoiseAmount = value;
+                return true;
+            case "NoiseSize":
+                collage.NoiseSize = value;
+                return true;
+            case "NoiseShadows":
+                collage.NoiseShadows = value;
+                return true;
+            case "NoiseHighlights":
+                collage.NoiseHighlights = value;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void EffectKnob_DragStarted(object sender, MouseButtonEventArgs e)
+    {
+        if (!_uiReady || _suppressKnobEvents || _effectKnobDragUndoDone)
+        {
+            return;
+        }
+
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
+        {
+            return;
+        }
+
+        GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
+        _effectKnobDragUndoDone = true;
+    }
+
+    private void EffectKnob_DragEnded(object sender, MouseButtonEventArgs e) =>
+        _effectKnobDragUndoDone = false;
+
+    private void EffectKnobSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_uiReady || _suppressKnobEvents || sender is not FrameworkElement element)
+        {
+            return;
+        }
+
+        string? key = element.Tag as string;
+        if (key is null || GetFocusedCollage() is not EditableCollage collage)
+        {
+            return;
+        }
+
+        if (!TryWriteKnobToCollage(collage, key, e.NewValue))
+        {
+            return;
+        }
+
+        if (TryReadKnobFromCollage(collage, key, out double applied))
+        {
+            _suppressKnobEvents = true;
+            SetKnobUi(key, applied);
+            _suppressKnobEvents = false;
+        }
+
+        ScheduleEffectKnobRefresh();
+    }
+
+    private void EffectKnobBox_GotFocus(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady || _suppressKnobEvents || GetFocusedCollage() is not EditableCollage collage)
+        {
+            return;
+        }
+
+        GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
+    }
+
+    private void EffectKnobBox_LostFocus(object sender, RoutedEventArgs e) =>
+        CommitEffectKnobBox(sender as TextBox);
+
+    private void EffectKnobBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            CommitEffectKnobBox(sender as TextBox);
+            e.Handled = true;
+        }
+    }
+
+    private void CommitEffectKnobBox(TextBox? box)
+    {
+        if (!_uiReady || _suppressKnobEvents || box?.Tag is not string key ||
+            GetFocusedCollage() is not EditableCollage collage)
+        {
+            return;
+        }
+
+        if (!TryParseKnob(box.Text, out double parsed))
+        {
+            if (TryReadKnobFromCollage(collage, key, out double restore))
+            {
+                _suppressKnobEvents = true;
+                box.Text = FormatKnob(restore);
+                _suppressKnobEvents = false;
+            }
+
+            return;
+        }
+
+        if (!TryWriteKnobToCollage(collage, key, parsed))
+        {
+            return;
+        }
+
+        if (TryReadKnobFromCollage(collage, key, out double applied))
+        {
+            _suppressKnobEvents = true;
+            SetKnobUi(key, applied);
+            _suppressKnobEvents = false;
+        }
+
+        ScheduleEffectKnobRefresh();
     }
 
     private bool HasEditableFocus() => GetFocusedCollage() is not null && !_busy;
@@ -1223,7 +1578,7 @@ public partial class MainWindow : Window
         }
 
         ClearStageInteractionState();
-        SyncEffectTogglesFromFocusedCollage();
+        SyncEffectsFromFocusedCollage();
         SchedulePreviewRefresh(immediate: true);
     }
 
@@ -1238,7 +1593,7 @@ public partial class MainWindow : Window
         DeckList.SelectedIndex = index;
         _syncingDeckFocus = false;
         ClearStageInteractionState();
-        SyncEffectTogglesFromFocusedCollage();
+        SyncEffectsFromFocusedCollage();
         ScheduleStageRefresh(immediate: true);
         RequestVisibleDeckPreviews();
     }

@@ -2,7 +2,7 @@
 
 Windows desktop and CLI tool for Instagram-style **layout collages** (stack, grid, combo pack, editable slot crops).
 
-Exports portrait collages at **3840×4800** with JPEG output capped at **8 MB** (Instagram upload limit). Built with **.NET 8**, **WPF**, and **libvips** (NetVips).
+Exports portrait collages at **3840×4800** and landscape layouts at **4800×3200** (3:2), with JPEG output capped at **8 MB** (Instagram upload limit). Built with **.NET 8**, **WPF**, and **libvips** (NetVips).
 
 ## Requirements
 

@@ -152,7 +152,7 @@ public static class LayoutGeometryCalculator
                 {
                     if (width > height)
                     {
-                        return (Constants.CanvasHeight, Constants.CanvasWidth);
+                        return (Constants.LandscapeCanvasWidth, Constants.LandscapeCanvasHeight);
                     }
 
                     return (Constants.CanvasWidth, Constants.CanvasHeight);
@@ -162,8 +162,8 @@ public static class LayoutGeometryCalculator
             return (Constants.CanvasWidth, Constants.CanvasHeight);
         }
 
-        int canvasW = config.LandscapeCanvas ? Constants.CanvasHeight : Constants.CanvasWidth;
-        int canvasH = config.LandscapeCanvas ? Constants.CanvasWidth : Constants.CanvasHeight;
+        int canvasW = config.LandscapeCanvas ? Constants.LandscapeCanvasWidth : Constants.CanvasWidth;
+        int canvasH = config.LandscapeCanvas ? Constants.LandscapeCanvasHeight : Constants.CanvasHeight;
         return (canvasW, canvasH);
     }
 }

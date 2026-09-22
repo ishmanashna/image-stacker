@@ -310,6 +310,7 @@
                 </Grid.RowDefinitions>
 
                 <GroupBox Grid.Row="0" Header="Mode &amp; style" Padding="6" Foreground="#FFFFFF">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
                         <TextBlock Text="Mode" FontWeight="SemiBold" Margin="0,0,0,4" Foreground="#FFFFFF" />
                         <RadioButton x:Name="ModeSingle" Content="Single (count)" GroupName="Mode"
@@ -339,9 +340,157 @@
                                   Foreground="#FFFFFF"
                                   Margin="0,4" Checked="Effect_Changed" Unchecked="Effect_Changed" />
 
+                        <Expander Header="Advanced" IsExpanded="False" Foreground="#FFFFFF" Margin="0,8,0,0">
+                            <StackPanel Margin="0,6,0,0">
+                                <TextBlock Text="Orton" FontWeight="SemiBold" Foreground="#FFFFFF" Margin="0,0,0,4" />
+                                <StackPanel x:Name="OrtonKnobsPanel">
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Amount" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="OrtonAmount" Minimum="0" Maximum="1" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="OrtonAmount" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Blur %" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="OrtonBlurPercent" Minimum="0.30" Maximum="1.80" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="OrtonBlurPercent" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Mask low" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="OrtonMaskLow" Minimum="0" Maximum="1" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="OrtonMaskLow" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Mask high" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="OrtonMaskHigh" Minimum="0" Maximum="1" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="OrtonMaskHigh" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Feather %" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="OrtonFeatherPercent" Minimum="0" Maximum="1" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="OrtonFeatherPercent" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <TextBlock Text="Noise" FontWeight="SemiBold" Foreground="#FFFFFF" Margin="0,10,0,4" />
+                                <StackPanel x:Name="NoiseKnobsPanel">
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Amount" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="NoiseAmount" Minimum="0" Maximum="1" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="NoiseAmount" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Size" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="NoiseSize" Minimum="0.40" Maximum="2.00" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="NoiseSize" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Shadows" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="NoiseShadows" Minimum="0" Maximum="1" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="NoiseShadows" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" MinWidth="60" />
+                                            <ColumnDefinition Width="48" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Highlights" VerticalAlignment="Center" Foreground="#FFFFFF" />
+                                        <Slider Grid.Column="1" Tag="NoiseHighlights" Minimum="0" Maximum="1" Margin="6,0"
+                                                ValueChanged="EffectKnobSlider_ValueChanged"
+                                                PreviewMouseLeftButtonDown="EffectKnob_DragStarted"
+                                                PreviewMouseLeftButtonUp="EffectKnob_DragEnded" />
+                                        <TextBox Grid.Column="2" Tag="NoiseHighlights" Margin="4,0,0,0"
+                                                 LostFocus="EffectKnobBox_LostFocus" KeyDown="EffectKnobBox_KeyDown"
+                                                 GotKeyboardFocus="EffectKnobBox_GotFocus" />
+                                    </Grid>
+                                </StackPanel>
+                            </StackPanel>
+                        </Expander>
+
                         <TextBlock Text="Color" Margin="0,10,0,4" Foreground="#FFFFFF" />
                         <ComboBox x:Name="ColorCombo"
                                   Width="160"
+                                  MaxDropDownHeight="240"
                                   IsEditable="True"
                                   HorizontalAlignment="Left"
                                   SelectionChanged="ColorCombo_SelectionChanged" />
@@ -352,6 +501,7 @@
                                    Margin="0,14,0,0"
                                    Foreground="#FFFFFF" />
                     </StackPanel>
+                    </ScrollViewer>
                 </GroupBox>
 
                 <GroupBox Grid.Row="1" Header="Run" Padding="6" Margin="0,10,0,0" Foreground="#FFFFFF">

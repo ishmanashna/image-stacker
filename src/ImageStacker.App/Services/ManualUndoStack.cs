@@ -5,7 +5,16 @@ namespace ImageStacker.App.Services;
 internal sealed record CollageUndoSnapshot(
     List<SlotAssignment?> Slots,
     bool Noise,
-    bool Orton);
+    bool Orton,
+    double OrtonAmount,
+    double OrtonBlurPercent,
+    double OrtonMaskLow,
+    double OrtonMaskHigh,
+    double OrtonFeatherPercent,
+    double NoiseAmount,
+    double NoiseSize,
+    double NoiseShadows,
+    double NoiseHighlights);
 
 internal sealed class ManualUndoStack
 {
@@ -67,6 +76,18 @@ internal sealed class ManualUndoStack
             slots.Add(slot is null ? null : slot with { });
         }
 
-        return new CollageUndoSnapshot(slots, source.Noise, source.Orton);
+        return new CollageUndoSnapshot(
+            slots,
+            source.Noise,
+            source.Orton,
+            source.OrtonAmount,
+            source.OrtonBlurPercent,
+            source.OrtonMaskLow,
+            source.OrtonMaskHigh,
+            source.OrtonFeatherPercent,
+            source.NoiseAmount,
+            source.NoiseSize,
+            source.NoiseShadows,
+            source.NoiseHighlights);
     }
 }

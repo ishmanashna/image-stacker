@@ -17,7 +17,8 @@ public static class CollageExporter
         IReadOnlyList<SlotAssignment>? slots = null,
         SourceImageCache? cache = null,
         bool noise = false,
-        bool orton = false)
+        bool orton = false,
+        CellEffectSettings? cellEffects = null)
     {
         LayoutGeometry geometry = LayoutGeometryCalculator.Compute(layoutName, borderless, bleed, orderedPaths);
         if (orderedPaths.Count != geometry.NumImages)
@@ -33,6 +34,7 @@ public static class CollageExporter
         }
 
         var canvasColor = ColorParser.Parse(color);
+        CellEffectSettings effects = CellEffectSettings.Resolve(noise, orton, cellEffects);
         bool ownsCache = cache is null;
         cache ??= new SourceImageCache();
         using var cells = new DisposableList<NetVips.Image>();
@@ -76,16 +78,17 @@ public static class CollageExporter
                     $"Image unusable (read error): {orderedPaths[i]}");
             }
 
+            if (effects.Noise || effects.Orton)
+            {
+                using var dry = processed;
+                processed = CellPhotoEffects.ApplyToCell(dry, effects);
+            }
+
             cells.Add(processed);
         }
 
         NetVips.Image result = ComposeCanvas(
             cells, canvasColor, geometry.Positions, geometry.CanvasWidth, geometry.CanvasHeight);
-        if (noise || orton)
-        {
-            using var composed = result;
-            result = PostComposeEffects.Apply(composed, noise, orton);
-        }
 
         if (ownsCache)
         {
@@ -105,14 +108,15 @@ public static class CollageExporter
         IReadOnlyList<SlotAssignment>? slots = null,
         SourceImageCache? cache = null,
         bool noise = false,
-        bool orton = false)
+        bool orton = false,
+        CellEffectSettings? cellEffects = null)
     {
         bool ownsCache = cache is null;
         cache ??= new SourceImageCache();
         try
         {
             using var collage = BuildCollageImage(
-                orderedPaths, layoutName, borderless, color, bleed, slots, cache, noise, orton);
+                orderedPaths, layoutName, borderless, color, bleed, slots, cache, noise, orton, cellEffects);
             JpegEncoder.SaveOptimized(collage, outputPath);
         }
         finally

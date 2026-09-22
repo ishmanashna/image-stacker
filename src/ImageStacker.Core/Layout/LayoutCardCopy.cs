@@ -67,7 +67,5 @@ public static partial class LayoutCardCopy
         string.Join(
             "\n",
             GetShortName(layoutId),
-            FormatInputOrientation(definition.Orientation),
-            FormatOutputOrientation(layoutId, definition),
-            FormatAxB(layoutId, definition));
+            $"{FormatInputOrientation(definition.Orientation)} → {FormatOutputOrientation(layoutId, definition)}");
 }
