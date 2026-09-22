@@ -24,7 +24,9 @@ public static class CellPhotoEffects
         }
 
         using var rgb = ImagePipeline.EnsureRgb(rgbCell);
-        Image current = ToUnitDouble(rgb);
+        // Gaussblur / Soft Light need random access. A header Copy() of a JPEG is still sequential.
+        using var memory = rgb.CopyMemory();
+        Image current = ToUnitDouble(memory);
 
         try
         {
@@ -42,7 +44,11 @@ public static class CellPhotoEffects
                 current = next;
             }
 
-            return FromUnitDouble(current);
+            using (current)
+            {
+                using var encoded = FromUnitDouble(current);
+                return encoded.CopyMemory();
+            }
         }
         catch
         {
@@ -83,21 +89,17 @@ public static class CellPhotoEffects
             return ImagePipeline.EnsureRgb(rgb);
         }
 
-        using var dryRgb = ImagePipeline.EnsureRgb(rgb);
-        Image? originalForRestore = protectColors.Length > 0 ? dryRgb.Copy() : null;
+        using var ensured = ImagePipeline.EnsureRgb(rgb);
+        using var dryRgb = ensured.CopyMemory();
         Image effected = ApplyToCell(dryRgb, settings);
-        if (protectColors.Length == 0 || originalForRestore is null)
+        if (protectColors.Length == 0)
         {
-            originalForRestore?.Dispose();
             return effected;
         }
 
         try
         {
-            using (originalForRestore)
-            {
-                return RestoreProtectedColors(originalForRestore, effected, protectColors);
-            }
+            return RestoreProtectedColors(dryRgb, effected, protectColors);
         }
         catch
         {
@@ -111,40 +113,43 @@ public static class CellPhotoEffects
         Image effectedRgb,
         ReadOnlySpan<(byte R, byte G, byte B)> protectColors)
     {
-        int width = originalRgb.Width;
-        int height = originalRgb.Height;
-        if (originalRgb.Bands != 3 || effectedRgb.Bands != 3)
+        if (protectColors.Length == 0 || originalRgb.Bands != 3 || effectedRgb.Bands != 3)
         {
             return effectedRgb;
         }
 
-        byte[] originalBytes = originalRgb.WriteToMemory();
-        byte[] effectedBytes = effectedRgb.WriteToMemory();
-
-        for (int i = 0; i < originalBytes.Length; i += 3)
+        Image? combined = null;
+        try
         {
-            byte or = originalBytes[i];
-            byte og = originalBytes[i + 1];
-            byte ob = originalBytes[i + 2];
             foreach ((byte pr, byte pg, byte pb) in protectColors)
             {
-                if (or == pr && og == pg && ob == pb)
+                using var eq = originalRgb.Equal(new double[] { pr, pg, pb });
+                Image thisMatch = eq.Bandbool(Enums.OperationBoolean.And);
+                if (combined is null)
                 {
-                    effectedBytes[i] = pr;
-                    effectedBytes[i + 1] = pg;
-                    effectedBytes[i + 2] = pb;
-                    break;
+                    combined = thisMatch;
+                    continue;
                 }
+
+                Image next = combined.Boolean(thisMatch, Enums.OperationBoolean.Or);
+                combined.Dispose();
+                thisMatch.Dispose();
+                combined = next;
+            }
+
+            using (combined)
+            {
+                using var restored = combined!.Ifthenelse(originalRgb, effectedRgb);
+                Image memory = restored.CopyMemory();
+                effectedRgb.Dispose();
+                return ImagePipeline.EnsureRgb(memory);
             }
         }
-
-        effectedRgb.Dispose();
-        return Image.NewFromMemory(
-            effectedBytes,
-            width,
-            height,
-            3,
-            Enums.BandFormat.Uchar).Copy(interpretation: Enums.Interpretation.Srgb);
+        catch
+        {
+            combined?.Dispose();
+            throw;
+        }
     }
 
     private static Image ApplyOrton(Image baseUnit, CellEffectSettings settings)

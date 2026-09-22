@@ -390,7 +390,7 @@ internal sealed class PreviewStageService : IDisposable
         lock (_dryCacheLock)
         {
             _dryCacheImage?.Dispose();
-            _dryCacheImage = dryCompose.Copy();
+            _dryCacheImage = dryCompose.CopyMemory();
             _dryCacheKey = cacheKey;
         }
     }
