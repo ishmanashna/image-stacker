@@ -1000,8 +1000,36 @@ public class CellPhotoEffectsTests
             dry,
             new CellEffectSettings(Noise: false, Orton: true));
 
-        double brightMad = MeanAbsoluteDifferenceInRect(dry, withOrton, 140, 40, 220, 120);
-        Assert.True(brightMad > 0.05);
+        double dryBright = MeanRgbInRect(dry, 140, 40, 220, 120);
+        double ortonBright = MeanRgbInRect(withOrton, 140, 40, 220, 120);
+        Assert.True(ortonBright > dryBright + 1.0);
+    }
+
+    [Fact]
+    public void OrtonWiderMaskAffectsMidGrayMoreThanTightMask()
+    {
+        using var dry = CreateOrtonTestCell();
+        using var wide = CellPhotoEffects.ApplyToCell(
+            dry,
+            new CellEffectSettings(
+                Noise: false,
+                Orton: true,
+                OrtonAmount: 0.8,
+                OrtonMaskLow: 0.15,
+                OrtonMaskHigh: 0.45));
+        using var tight = CellPhotoEffects.ApplyToCell(
+            dry,
+            new CellEffectSettings(
+                Noise: false,
+                Orton: true,
+                OrtonAmount: 0.8,
+                OrtonMaskLow: 0.75,
+                OrtonMaskHigh: 0.95));
+
+        // Gray surround is ~80/255 ≈ 0.31 — inside the wide mask, outside the tight one.
+        double wideGray = MeanAbsoluteDifferenceInRect(dry, wide, 8, 8, 24, 24);
+        double tightGray = MeanAbsoluteDifferenceInRect(dry, tight, 8, 8, 24, 24);
+        Assert.True(wideGray > tightGray + 0.5);
     }
 
     [Fact]

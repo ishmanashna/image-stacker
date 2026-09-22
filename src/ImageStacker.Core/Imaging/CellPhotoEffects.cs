@@ -156,23 +156,34 @@ public static class CellPhotoEffects
         double blurSigma = Math.Max(0.5, minSide * settings.OrtonBlurPercent / 100.0);
         double featherSigma = minSide * settings.OrtonFeatherPercent / 100.0;
 
+        double maskLow = settings.OrtonMaskLow;
+        double maskHigh = settings.OrtonMaskHigh;
+        if (maskLow > maskHigh)
+        {
+            (maskLow, maskHigh) = (maskHigh, maskLow);
+        }
+
+        // Keep a real ramp so Mask low / Mask high never collapse to "no effect".
+        if (maskHigh - maskLow < 0.04)
+        {
+            maskHigh = Math.Min(1.0, maskLow + 0.04);
+        }
+
         using var lifted = baseUnit.Linear(new[] { OrtonLift, OrtonLift, OrtonLift }, new[] { 0.0, 0.0, 0.0 }).Clamp(0, 1);
         using var glow = lifted.Gaussblur(blurSigma);
-        using var glowBlendRaw = baseUnit.Composite2(glow, Enums.BlendMode.SoftLight);
-        using var glowBlend = ImagePipeline.EnsureRgb(glowBlendRaw);
+        // Screen only lightens. Soft Light darkens highlight peaks because the blur is darker than the peak.
+        using var screen = baseUnit.Add(glow).Subtract(baseUnit.Multiply(glow)).Clamp(0, 1);
 
         using var luma = ExtractLuma(baseUnit);
-        using var mask = FeatherMask(
-            Smoothstep(settings.OrtonMaskLow, settings.OrtonMaskHigh, luma),
-            featherSigma);
+        using var mask = FeatherMask(Smoothstep(maskLow, maskHigh, luma), featherSigma);
 
-        using var diff = glowBlend.Subtract(baseUnit);
+        using var diff = screen.Subtract(baseUnit);
         using var maskRgb = mask.Bandjoin([mask, mask]);
         using var weighted = diff.Multiply(maskRgb).Linear(
             new[] { settings.OrtonAmount, settings.OrtonAmount, settings.OrtonAmount },
             new[] { 0.0, 0.0, 0.0 });
 
-        return baseUnit.Add(weighted);
+        return baseUnit.Add(weighted).Clamp(0, 1);
     }
 
     private static Image ApplyNoise(Image baseUnit, CellEffectSettings settings)
