@@ -1,6 +1,9 @@
 # Local bootstrap / split tooling (machine-specific paths)
 tools/
 
+# Local agent notes (not product)
+ORCHESTRATOR.txt
+
 # IDE
 .cursor/
 
