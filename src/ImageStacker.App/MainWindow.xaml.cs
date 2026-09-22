@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using IOPath = System.IO.Path;
+using ImageStacker.App.Imaging;
 using ImageStacker.App.Services;
 using ImageStacker.Core;
 using ImageStacker.Core.Export;
@@ -37,6 +38,10 @@ public partial class MainWindow : Window
     private Point _thumbDragStart;
     private bool _thumbDragMoved;
     private bool _syncingDeckFocus;
+    private string? _deckIdentityKey;
+    private string? _deckRenderKey;
+    private string? _standaloneIdentityKey;
+    private readonly HashSet<string> _excludedPaths = new(StringComparer.OrdinalIgnoreCase);
 
     private int? _stageDownSlot;
     private Point _stagePressPoint;
@@ -107,16 +112,14 @@ public partial class MainWindow : Window
     {
         foreach (string layoutKey in UiConstants.LayoutOrder)
         {
-            if (!UiConstants.LayoutCardText.TryGetValue(layoutKey, out var text))
-            {
-                text = (layoutKey, string.Empty);
-            }
+            LayoutDefinition layout = LayoutCatalog.GetRequired(layoutKey);
+            string cardText = LayoutCardCopy.BuildCardText(layoutKey, layout);
 
             var button = new Button
             {
                 Content = new TextBlock
                 {
-                    Text = $"{text.Title}\n{text.Subtitle}",
+                    Text = cardText,
                     TextAlignment = TextAlignment.Center,
                     TextWrapping = TextWrapping.Wrap,
                     FontSize = 11,
@@ -141,7 +144,7 @@ public partial class MainWindow : Window
             ColorCombo.Items.Add(new ComboBoxItem { Content = label, Tag = value });
         }
 
-        ColorCombo.Items.Add(new ComboBoxItem { Content = "Custom…", Tag = "__custom__" });
+        ColorCombo.Items.Add(new ComboBoxItem { Content = "Custom\u2026", Tag = "__custom__" });
     }
 
     private string SelectedLayout
@@ -373,8 +376,36 @@ public partial class MainWindow : Window
 
     private void OnThumbnailsUpdated(IReadOnlyList<ThumbnailItem> items)
     {
+        foreach (ThumbnailItem item in items)
+        {
+            item.IncludedChanged = OnThumbnailIncludedChanged;
+            item.SyncIncluded(!IsPathExcluded(item.Path));
+        }
+
         ThumbList.ItemsSource = null;
         ThumbList.ItemsSource = items;
+    }
+
+    private bool IsPathExcluded(string path) => _excludedPaths.Contains(path);
+
+    private void OnThumbnailIncludedChanged(ThumbnailItem item)
+    {
+        if (item.Included)
+        {
+            _excludedPaths.Remove(item.Path);
+        }
+        else
+        {
+            _excludedPaths.Add(item.Path);
+        }
+
+        if (_suppressUiEvents)
+        {
+            return;
+        }
+
+        UpdateRunEstimate();
+        SchedulePreviewRefresh();
     }
 
     private void RefreshPhotos_Click(object sender, RoutedEventArgs e)
@@ -385,6 +416,54 @@ public partial class MainWindow : Window
         }
 
         ReloadThumbnails();
+    }
+
+    private void ColorOn_Click(object sender, RoutedEventArgs e) =>
+        ApplyColorMonoMassInclude(selectColor: true, include: true);
+
+    private void ColorOff_Click(object sender, RoutedEventArgs e) =>
+        ApplyColorMonoMassInclude(selectColor: true, include: false);
+
+    private void MonoOn_Click(object sender, RoutedEventArgs e) =>
+        ApplyColorMonoMassInclude(selectColor: false, include: true);
+
+    private void MonoOff_Click(object sender, RoutedEventArgs e) =>
+        ApplyColorMonoMassInclude(selectColor: false, include: false);
+
+    private void ApplyColorMonoMassInclude(bool selectColor, bool include)
+    {
+        if (_busy || ThumbList.ItemsSource is not IEnumerable<ThumbnailItem> items)
+        {
+            return;
+        }
+
+        _suppressUiEvents = true;
+        try
+        {
+            foreach (ThumbnailItem item in items)
+            {
+                bool? isMonochrome = ThumbnailChroma.TryIsMonochrome(item.Bitmap);
+                if (isMonochrome is null)
+                {
+                    continue;
+                }
+
+                bool matches = selectColor ? !isMonochrome.Value : isMonochrome.Value;
+                if (!matches)
+                {
+                    continue;
+                }
+
+                item.Included = include;
+            }
+        }
+        finally
+        {
+            _suppressUiEvents = false;
+        }
+
+        UpdateRunEstimate();
+        SchedulePreviewRefresh();
     }
 
     private void LayoutCard_Click(object sender, RoutedEventArgs e)
@@ -457,6 +536,9 @@ public partial class MainWindow : Window
 
         BorderlessCheck.IsEnabled = enableEditing && !combo;
         BleedCheck.IsEnabled = enableEditing && !combo && BorderlessCheck.IsChecked != true;
+        bool canEditEffects = enableEditing && GetFocusedCollage() is not null;
+        NoiseCheck.IsEnabled = canEditEffects;
+        OrtonCheck.IsEnabled = canEditEffects;
         CountBox.IsEnabled = enableEditing && mode is "single" or "random";
 
         PreviewPrevButton.IsEnabled = enableEditing && !manual;
@@ -508,6 +590,40 @@ public partial class MainWindow : Window
 
         UpdateRunEstimate();
         SchedulePreviewRefresh();
+    }
+
+    private void Effect_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady || _suppressUiEvents)
+        {
+            return;
+        }
+
+        EditableCollage? collage = GetFocusedCollage();
+        if (collage is null)
+        {
+            return;
+        }
+
+        bool noise = NoiseCheck.IsChecked == true;
+        bool orton = OrtonCheck.IsChecked == true;
+        if (collage.Noise == noise && collage.Orton == orton)
+        {
+            return;
+        }
+
+        GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
+        collage.Noise = noise;
+        collage.Orton = orton;
+
+        if (DeckPanel.Visibility == Visibility.Visible &&
+            _deckService.FocusIndex >= 0 &&
+            _deckService.FocusIndex < _deckService.Cards.Count)
+        {
+            _deckService.InvalidatePreviewForIndex(_deckService.FocusIndex);
+        }
+
+        ScheduleStageRefresh(immediate: true);
     }
 
     private void ColorCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -577,7 +693,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        int expected = ExportService.EstimateOutputCount(input, mode, layout, count, borderless);
+        IReadOnlyList<string> includedPaths = ResolveIncludedPathsForJobs();
+        int expected = ExportService.EstimateOutputCount(includedPaths, mode, layout, count, borderless);
         if (expected == 0)
         {
             RunInfoText.Text = "No collages to generate with current folder and settings.";
@@ -590,23 +707,23 @@ public partial class MainWindow : Window
             string modeLabel = mode switch
             {
                 "batch" => "batch",
-                "random" => $"random × {count}",
+                "random" => $"random \u00D7 {count}",
                 _ => "combo pack",
             };
             RunInfoText.Text =
-                $"Deck: {expected} card(s) — {selected} ticked. Run asks export current or all ticked ({modeLabel}).";
+                $"Deck: {expected} card(s) \u2014 {selected} ticked. Run asks export current or all ticked ({modeLabel}).";
             return;
         }
 
         string singleModeLabel = mode switch
         {
             "batch" => "batch",
-            "random" => $"random × {count}",
+            "random" => $"random \u00D7 {count}",
             "combo" => "combo pack",
             _ => $"single (count {count})",
         };
 
-        RunInfoText.Text = $"Will write {expected} file(s) — {singleModeLabel}, layout {layout}.";
+        RunInfoText.Text = $"Will write {expected} file(s) \u2014 {singleModeLabel}, layout {layout}.";
     }
 
     private void Shortcuts_Click(object sender, RoutedEventArgs e)
@@ -630,7 +747,9 @@ public partial class MainWindow : Window
         bool bleed = BleedCheck.IsChecked == true;
         string color = SelectedColor;
 
-        string? validationError = ExportService.ValidateRun(input, output, mode, layout, count, borderless);
+        IReadOnlyList<string> runIncludedPaths = ResolveIncludedPathsForJobs();
+        string? validationError = ExportService.ValidateRun(
+            input, output, mode, layout, count, borderless, runIncludedPaths);
         if (validationError is not null)
         {
             MessageBox.Show(validationError, "Cannot run", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -638,7 +757,9 @@ public partial class MainWindow : Window
         }
 
         bool useDeck = mode != "manual"
-            && DeckService.ShouldShowDeck(mode, ExportService.EstimateOutputCount(input, mode, layout, count, borderless));
+            && DeckService.ShouldShowDeck(
+                mode,
+                ExportService.EstimateOutputCount(runIncludedPaths, mode, layout, count, borderless));
 
         ExportChoice exportChoice = ExportChoice.Current;
         if (useDeck)
@@ -700,8 +821,8 @@ public partial class MainWindow : Window
         RunProgress.Visibility = Visibility.Visible;
         RunProgress.Maximum = jobs.Count;
         RunProgress.Value = 0;
-        StatusText.Text = "Working…";
-        RunWorkingText.Text = "Processing…";
+        StatusText.Text = "Working\u2026";
+        RunWorkingText.Text = "Processing\u2026";
 
         var stopwatch = Stopwatch.StartNew();
 
@@ -714,7 +835,7 @@ public partial class MainWindow : Window
                 int lo = Math.Max(2, (int)(jobs.Count * 0.2));
                 int hi = Math.Max(lo + 4, (int)(jobs.Count * 0.9));
                 RunWorkingText.Text =
-                    $"Processing… about {lo}–{hi}s for ~{jobs.Count} file(s) (varies with CPU & photos).";
+                    $"Processing\u2026 about {lo}\u2013{hi}s for ~{jobs.Count} file(s) (varies with CPU & photos).";
             }
 
             int completed = 0;
@@ -737,7 +858,7 @@ public partial class MainWindow : Window
             if (result.Failed > 0)
             {
                 StatusText.Text =
-                    $"Finished in {stopwatch.Elapsed.TotalSeconds:F1}s — {result.Succeeded}/{result.Total} succeeded.";
+                    $"Finished in {stopwatch.Elapsed.TotalSeconds:F1}s \u2014 {result.Succeeded}/{result.Total} succeeded.";
             }
             else
             {
@@ -758,7 +879,7 @@ public partial class MainWindow : Window
         {
             stopwatch.Stop();
             FileLogger.Error("Run failed", ex);
-            StatusText.Text = "Failed — see log.";
+            StatusText.Text = "Failed \u2014 see log.";
             MessageBox.Show(
                 $"{ex.Message}\n\nSee log at {AppPaths.LogFile}",
                 "Run failed",
@@ -794,13 +915,17 @@ public partial class MainWindow : Window
                 null)];
         }
 
-        IReadOnlyList<ExportJob> allJobs = ExportService.BuildJobs(input, mode, layout, count, borderless);
-        bool useDeck = DeckService.ShouldShowDeck(mode, allJobs.Count);
+        bool useDeck = DeckPanel.Visibility == Visibility.Visible && _deckService.Cards.Count > 0;
 
         if (useDeck)
         {
             if (exportChoice == ExportChoice.Current)
             {
+                if (_deckService.FocusIndex < 0 || _deckService.FocusIndex >= _deckService.Cards.Count)
+                {
+                    return Array.Empty<(ExportJob, EditableCollage, string?)>();
+                }
+
                 DeckCardItem card = _deckService.Cards[_deckService.FocusIndex];
                 return [(
                     ExportService.BuildExportJobFromCollage(card.Collage, card.DeckIndex),
@@ -817,16 +942,16 @@ public partial class MainWindow : Window
                 .ToList();
         }
 
-        EditableCollage? collage = GetFocusedCollage();
-        if (collage is null)
+        EnsureStandaloneCollages();
+        if (_standaloneCollages.Count == 0)
         {
             return Array.Empty<(ExportJob, EditableCollage, string?)>();
         }
 
-        int focusIndex = Math.Clamp(_previewStage.FocusIndex, 0, Math.Max(0, allJobs.Count - 1));
-        ExportJob template = allJobs[focusIndex];
+        int focusIndex = Math.Clamp(_previewStage.FocusIndex, 0, _standaloneCollages.Count - 1);
+        EditableCollage collage = _standaloneCollages[focusIndex];
         return [(
-            ExportService.BuildExportJobFromCollage(collage, template.JobIndex),
+            ExportService.BuildExportJobFromCollage(collage, focusIndex + 1),
             collage,
             null)];
     }
@@ -862,11 +987,44 @@ public partial class MainWindow : Window
             return;
         }
 
-        RebuildDeck();
+        RebuildDeckIfIdentityChanged();
+        ScheduleStageRefresh(immediate);
+    }
+
+    private void ScheduleStageRefresh(bool immediate = false)
+    {
         EnsureStandaloneCollages();
+        SyncEffectTogglesFromFocusedCollage();
         int? deckFocus = DeckPanel.Visibility == Visibility.Visible ? _deckService.FocusIndex : null;
         _previewStage.ScheduleRefresh(BuildPreviewRequest(), immediate, deckFocus);
     }
+
+    private IReadOnlyList<string> ResolveIncludedPathsForJobs()
+    {
+        string input = InputFolderBox.Text.Trim();
+        string mode = SelectedMode;
+        string layout = mode == "manual" ? _manualCollage.Layout : SelectedLayout;
+        IReadOnlyList<string> candidates = ExportService.ResolveIncludedPaths(input, mode, layout);
+        if (_excludedPaths.Count == 0)
+        {
+            return candidates;
+        }
+
+        return candidates
+            .Where(p => !IsPathExcluded(p))
+            .ToList();
+    }
+
+    private static string BuildDeckIdentityKey(
+        string input,
+        string mode,
+        string layout,
+        int count,
+        IReadOnlyList<string> includedPaths) =>
+        $"{input}\0{mode}\0{layout}\0{count}\0{string.Join('\0', includedPaths)}";
+
+    private static string BuildDeckRenderKey(string color, bool bleed, bool borderless) =>
+        $"{color}\0{bleed}\0{borderless}";
 
     private void EnsureStandaloneCollages()
     {
@@ -886,32 +1044,19 @@ public partial class MainWindow : Window
         int count = SelectedCount;
         bool borderless = BorderlessCheck.IsChecked == true;
 
-        IReadOnlyList<ExportJob> jobs = ExportService.BuildJobs(input, mode, layout, count, borderless);
-        if (StandaloneCollagesMatch(jobs))
+        IReadOnlyList<string> includedPaths = ResolveIncludedPathsForJobs();
+        string identityKey = BuildDeckIdentityKey(input, mode, layout, count, includedPaths);
+        if (string.Equals(identityKey, _standaloneIdentityKey, StringComparison.Ordinal)
+            && _standaloneCollages.Count > 0)
         {
+            SyncStandaloneRenderOptions(borderless);
             return;
         }
 
+        IReadOnlyList<ExportJob> jobs = ExportService.BuildJobs(includedPaths, mode, layout, count, borderless);
+        _standaloneIdentityKey = identityKey;
         _standaloneCollages = jobs.Select(EditableCollage.FromJob).ToList();
         _standaloneUndos = jobs.Select(_ => new ManualUndoStack()).ToList();
-    }
-
-    private bool StandaloneCollagesMatch(IReadOnlyList<ExportJob> jobs)
-    {
-        if (_standaloneCollages.Count != jobs.Count)
-        {
-            return false;
-        }
-
-        for (int i = 0; i < jobs.Count; i++)
-        {
-            if (!_standaloneCollages[i].MatchesJob(jobs[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private EditableCollage? GetFocusedCollage()
@@ -951,9 +1096,39 @@ public partial class MainWindow : Window
         return _standaloneUndos[index];
     }
 
+    private static CollageUndoSnapshot CaptureUndoState(EditableCollage collage) =>
+        new(collage.Slots.ToList(), collage.Noise, collage.Orton);
+
+    private void ApplyUndoSnapshot(EditableCollage collage, CollageUndoSnapshot snapshot)
+    {
+        collage.Slots.Clear();
+        collage.Slots.AddRange(snapshot.Slots);
+        collage.Noise = snapshot.Noise;
+        collage.Orton = snapshot.Orton;
+        SyncEffectTogglesFromFocusedCollage();
+    }
+
+    private void SyncEffectTogglesFromFocusedCollage()
+    {
+        EditableCollage? collage = GetFocusedCollage();
+        _suppressUiEvents = true;
+        if (collage is null)
+        {
+            NoiseCheck.IsChecked = false;
+            OrtonCheck.IsChecked = false;
+        }
+        else
+        {
+            NoiseCheck.IsChecked = collage.Noise;
+            OrtonCheck.IsChecked = collage.Orton;
+        }
+
+        _suppressUiEvents = false;
+    }
+
     private bool HasEditableFocus() => GetFocusedCollage() is not null && !_busy;
 
-    private void RebuildDeck()
+    private void RebuildDeckIfIdentityChanged()
     {
         string input = InputFolderBox.Text.Trim();
         string mode = SelectedMode;
@@ -965,6 +1140,13 @@ public partial class MainWindow : Window
 
         if (mode is "manual" or "single")
         {
+            _deckIdentityKey = null;
+            _deckRenderKey = null;
+            if (mode == "manual")
+            {
+                _standaloneIdentityKey = null;
+            }
+
             _deckService.Clear();
             DeckPanel.Visibility = Visibility.Collapsed;
             DeckList.ItemsSource = null;
@@ -972,9 +1154,30 @@ public partial class MainWindow : Window
             return;
         }
 
-        int jobCount = ExportService.EstimateOutputCount(input, mode, layout, count, borderless);
+        IReadOnlyList<string> includedPaths = ResolveIncludedPathsForJobs();
+        string identityKey = BuildDeckIdentityKey(input, mode, layout, count, includedPaths);
+        string renderKey = BuildDeckRenderKey(color, bleed, borderless);
+
+        if (string.Equals(identityKey, _deckIdentityKey, StringComparison.Ordinal) &&
+            DeckPanel.Visibility == Visibility.Visible &&
+            _deckService.Cards.Count > 1)
+        {
+            if (!string.Equals(renderKey, _deckRenderKey, StringComparison.Ordinal))
+            {
+                _deckRenderKey = renderKey;
+                _deckService.ApplyRenderOptions(color, bleed, mode == "combo" ? null : borderless);
+            }
+
+            UpdateDeckSelectionText();
+            RequestVisibleDeckPreviews();
+            return;
+        }
+
+        int jobCount = ExportService.EstimateOutputCount(includedPaths, mode, layout, count, borderless);
         if (!DeckService.ShouldShowDeck(mode, jobCount))
         {
+            _deckIdentityKey = null;
+            _deckRenderKey = null;
             _deckService.Clear();
             DeckPanel.Visibility = Visibility.Collapsed;
             DeckList.ItemsSource = null;
@@ -982,20 +1185,34 @@ public partial class MainWindow : Window
             return;
         }
 
-        bool candidatesChanged = _deckService.RefreshOrRebuild(
-            input, mode, layout, count, borderless, color, bleed);
         DeckPanel.Visibility = Visibility.Visible;
 
-        if (candidatesChanged)
+        if (!string.Equals(identityKey, _deckIdentityKey, StringComparison.Ordinal))
         {
+            _deckIdentityKey = identityKey;
+            _deckRenderKey = renderKey;
+            _deckService.RebuildIdentity(includedPaths, mode, layout, count, borderless, color, bleed);
             _syncingDeckFocus = true;
             DeckList.ItemsSource = _deckService.Cards;
             DeckList.SelectedIndex = _deckService.FocusIndex;
             _syncingDeckFocus = false;
         }
+        else if (!string.Equals(renderKey, _deckRenderKey, StringComparison.Ordinal))
+        {
+            _deckRenderKey = renderKey;
+            _deckService.ApplyRenderOptions(color, bleed, mode == "combo" ? null : borderless);
+        }
 
         UpdateDeckSelectionText();
         RequestVisibleDeckPreviews();
+    }
+
+    private void SyncStandaloneRenderOptions(bool borderless)
+    {
+        foreach (EditableCollage collage in _standaloneCollages)
+        {
+            collage.Borderless = borderless;
+        }
     }
 
     private void OnPreviewFocusIndexChanged(int index)
@@ -1006,6 +1223,7 @@ public partial class MainWindow : Window
         }
 
         ClearStageInteractionState();
+        SyncEffectTogglesFromFocusedCollage();
         SchedulePreviewRefresh(immediate: true);
     }
 
@@ -1020,7 +1238,8 @@ public partial class MainWindow : Window
         DeckList.SelectedIndex = index;
         _syncingDeckFocus = false;
         ClearStageInteractionState();
-        SchedulePreviewRefresh(immediate: true);
+        SyncEffectTogglesFromFocusedCollage();
+        ScheduleStageRefresh(immediate: true);
         RequestVisibleDeckPreviews();
     }
 
@@ -1140,9 +1359,8 @@ public partial class MainWindow : Window
 
     private PreviewRequest BuildPreviewRequest()
     {
-        bool borderless = SelectedMode == "manual"
-            ? _manualCollage.Borderless
-            : BorderlessCheck.IsChecked == true;
+        EditableCollage? focused = GetFocusedCollage();
+        bool borderless = focused?.Borderless ?? (BorderlessCheck.IsChecked == true);
 
         int focusIndex;
         int focusCount;
@@ -1170,7 +1388,9 @@ public partial class MainWindow : Window
             borderless,
             BleedCheck.IsChecked == true,
             SelectedColor,
-            GetFocusedCollage(),
+            focused?.Noise ?? false,
+            focused?.Orton ?? false,
+            focused,
             focusIndex,
             focusCount);
     }
@@ -1313,11 +1533,37 @@ public partial class MainWindow : Window
         return LayoutGeometryCalculator.Compute(
             collage.Layout,
             collage.Borderless,
-            BleedCheck.IsChecked == true);
+            BleedCheck.IsChecked == true,
+            ResolveGeometryPaths(collage));
     }
 
-    private ManualStageGeometry.StageMetrics GetStageMetrics() =>
-        ManualStageGeometry.ComputeMetrics(StageBorder.ActualWidth, StageBorder.ActualHeight);
+    private static IReadOnlyList<string>? ResolveGeometryPaths(EditableCollage collage)
+    {
+        if (!string.Equals(collage.Layout, "stack-1", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        foreach (SlotAssignment? slot in collage.Slots)
+        {
+            if (!string.IsNullOrWhiteSpace(slot?.Path))
+            {
+                return new[] { slot.Path };
+            }
+        }
+
+        return collage.Paths.Count > 0 ? collage.Paths : null;
+    }
+
+    private ManualStageGeometry.StageMetrics GetStageMetrics()
+    {
+        LayoutGeometry geometry = GetStageGeometry();
+        return ManualStageGeometry.ComputeMetrics(
+            StageBorder.ActualWidth,
+            StageBorder.ActualHeight,
+            geometry.CanvasWidth,
+            geometry.CanvasHeight);
+    }
 
     private int? HitTestStageSlot(Point position)
     {
@@ -1334,7 +1580,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        GetFocusedUndo().Checkpoint(collage.Slots);
+        GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
         double panX = 0.0;
         double panY = 0.0;
         if (collage.Layout.Equals("grid-1x2-v", StringComparison.OrdinalIgnoreCase) && collage.Slots.Count == 2)
@@ -1348,6 +1594,12 @@ public partial class MainWindow : Window
 
     private void AssignThumbClick(string path)
     {
+        if (IsPathExcluded(path))
+        {
+            StatusText.Text = "Excluded from auto pools \u2014 drag onto a slot to assign.";
+            return;
+        }
+
         EditableCollage? collage = GetFocusedCollage();
         if (collage is null)
         {
@@ -1363,7 +1615,7 @@ public partial class MainWindow : Window
             }
         }
 
-        StatusText.Text = "All slots are full — right-click a slot on the preview to clear one.";
+        StatusText.Text = "All slots are full \u2014 right-click a slot on the preview to clear one.";
     }
 
     private void ClearSlot(int slot)
@@ -1374,7 +1626,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        GetFocusedUndo().Checkpoint(collage.Slots);
+        GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
         collage.Slots[slot] = null;
         CommitCollageEdit($"Cleared slot {slot + 1}.");
     }
@@ -1392,7 +1644,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        GetFocusedUndo().Checkpoint(collage.Slots);
+        GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
         (collage.Slots[a], collage.Slots[b]) = (collage.Slots[b], collage.Slots[a]);
         CommitCollageEdit($"Swapped slots {a + 1} and {b + 1}.");
     }
@@ -1405,14 +1657,13 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<SlotAssignment?>? restored = GetFocusedUndo().Undo(collage.Slots);
+        CollageUndoSnapshot? restored = GetFocusedUndo().Undo(CaptureUndoState(collage));
         if (restored is null)
         {
             return;
         }
 
-        collage.Slots.Clear();
-        collage.Slots.AddRange(restored);
+        ApplyUndoSnapshot(collage, restored);
         ClearStageInteractionState();
         CommitCollageEdit("Undo.", refreshImmediate: true);
     }
@@ -1425,14 +1676,13 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<SlotAssignment?>? restored = GetFocusedUndo().Redo(collage.Slots);
+        CollageUndoSnapshot? restored = GetFocusedUndo().Redo(CaptureUndoState(collage));
         if (restored is null)
         {
             return;
         }
 
-        collage.Slots.Clear();
-        collage.Slots.AddRange(restored);
+        ApplyUndoSnapshot(collage, restored);
         ClearStageInteractionState();
         CommitCollageEdit("Redo.", refreshImmediate: true);
     }
@@ -1454,6 +1704,11 @@ public partial class MainWindow : Window
 
     private void Thumb_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.OriginalSource is CheckBox)
+        {
+            return;
+        }
+
         if (!HasEditableFocus() || sender is not FrameworkElement element ||
             element.DataContext is not ThumbnailItem item)
         {
@@ -1548,7 +1803,7 @@ public partial class MainWindow : Window
             _stageDownSlot = null;
             StageBorder.CaptureMouse();
             StatusText.Text =
-                $"Slot {slot.Value + 1} picked — release on another slot to swap (crops stay with each photo).";
+                $"Slot {slot.Value + 1} picked \u2014 release on another slot to swap (crops stay with each photo).";
             UpdateSwapOverlay();
             e.Handled = true;
             return;
@@ -1667,7 +1922,7 @@ public partial class MainWindow : Window
             {
                 _previewStage.FlushPendingRender();
                 _previewStage.ClearManualLivePan();
-                GetFocusedUndo().Checkpoint(collage.Slots);
+                GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
                 collage.Slots[slot] = fill with { PanX = _panLive.Value.X, PanY = _panLive.Value.Y };
                 CommitCollageEdit($"Slot {slot + 1} pan updated.", refreshImmediate: true);
             }
@@ -1698,7 +1953,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        GetFocusedUndo().Checkpoint(collage.Slots);
+        GetFocusedUndo().Checkpoint(CaptureUndoState(collage));
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
             collage.Slots[slot.Value] = fill with { Grayscale = !fill.Grayscale };

@@ -179,6 +179,30 @@ public class ExportSlotsTests
 public class ScannerOrientationFilterTests
 {
     [Fact]
+    public void GetValidPathsIncludesNestedSubfolderJpeg()
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            string sub = Path.Combine(temp, "sub");
+            Directory.CreateDirectory(sub);
+            string nested = Path.Combine(sub, "a.jpg");
+            string template = SyntheticImages.CreateLandscapeJpeg(temp);
+            File.Copy(template, nested);
+            File.Delete(template);
+
+            IReadOnlyList<string> valid = ImageScanner.GetValidPaths(temp, LayoutOrientation.Mixed);
+
+            Assert.Single(valid);
+            Assert.Equal(Path.GetFullPath(nested), valid[0]);
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
     public void GetValidPathsExcludesPortraitForHorizontalLayout()
     {
         string temp = CreateTempDir();
@@ -200,8 +224,8 @@ public class ScannerOrientationFilterTests
 
     private static List<string> CreateLandscapePhotos(string directory, int count)
     {
-        string synthDir = Path.Combine(directory, "_synth");
-        Directory.CreateDirectory(synthDir);
+        Directory.CreateDirectory(directory);
+        string synthDir = Path.Combine(Path.GetTempPath(), "image-stacker-tests", "synth", Guid.NewGuid().ToString("N"));
         string template = SyntheticImages.CreateLandscapeJpeg(synthDir);
 
         var paths = new List<string>();
@@ -217,8 +241,8 @@ public class ScannerOrientationFilterTests
 
     private static List<string> CreatePortraitPhotos(string directory, int count)
     {
-        string synthDir = Path.Combine(directory, "_synth");
-        Directory.CreateDirectory(synthDir);
+        Directory.CreateDirectory(directory);
+        string synthDir = Path.Combine(Path.GetTempPath(), "image-stacker-tests", "synth", Guid.NewGuid().ToString("N"));
         string template = SyntheticImages.CreatePortraitJpeg(synthDir);
 
         var paths = new List<string>();

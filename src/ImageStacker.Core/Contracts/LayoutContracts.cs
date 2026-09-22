@@ -8,8 +8,8 @@ namespace ImageStacker.Core.Contracts;
 
 public static class LayoutContracts
 {
-    public static IReadOnlyList<IReadOnlyList<string>> ListLayoutCandidates(
-        string folder,
+    public static IReadOnlyList<IReadOnlyList<string>> ListLayoutCandidatesFromPaths(
+        IReadOnlyList<string> validPaths,
         string layout,
         int count,
         bool batch,
@@ -19,7 +19,6 @@ public static class LayoutContracts
         _ = borderless;
 
         LayoutDefinition definition = LayoutCatalog.GetRequired(layout);
-        IReadOnlyList<string> validPaths = ImageScanner.GetValidPaths(folder, definition.Orientation);
         if (validPaths.Count < definition.NumImages)
         {
             return Array.Empty<IReadOnlyList<string>>();
@@ -28,15 +27,33 @@ public static class LayoutContracts
         return CombinationGenerator.Generate(validPaths, definition.NumImages, batch, random, count);
     }
 
-    public static IReadOnlyList<(IReadOnlyList<string> Paths, string LayoutName, bool Borderless)> ListComboSequences(
-        string folder)
+    public static IReadOnlyList<IReadOnlyList<string>> ListLayoutCandidates(
+        string folder,
+        string layout,
+        int count,
+        bool batch,
+        bool random,
+        bool borderless)
+    {
+        LayoutDefinition definition = LayoutCatalog.GetRequired(layout);
+        IReadOnlyList<string> validPaths = ImageScanner.GetValidPaths(folder, definition.Orientation);
+        return ListLayoutCandidatesFromPaths(validPaths, layout, count, batch, random, borderless);
+    }
+
+    public static IReadOnlyList<(IReadOnlyList<string> Paths, string LayoutName, bool Borderless)> ListComboSequencesFromPaths(
+        IReadOnlyList<string> includedPaths)
     {
         var sequences = new List<(IReadOnlyList<string>, string, bool)>();
 
         foreach (ComboJobSpec spec in ComboJobSpecs.All)
         {
-            IReadOnlyList<IReadOnlyList<string>> combos = ListLayoutCandidates(
-                folder,
+            LayoutDefinition definition = LayoutCatalog.GetRequired(spec.LayoutName);
+            IReadOnlyList<string> validPaths = ImageScanner.FilterByOrientation(
+                includedPaths,
+                definition.Orientation);
+
+            IReadOnlyList<IReadOnlyList<string>> combos = ListLayoutCandidatesFromPaths(
+                validPaths,
                 spec.LayoutName,
                 spec.Count,
                 spec.Batch,
@@ -50,6 +67,13 @@ public static class LayoutContracts
         }
 
         return sequences;
+    }
+
+    public static IReadOnlyList<(IReadOnlyList<string> Paths, string LayoutName, bool Borderless)> ListComboSequences(
+        string folder)
+    {
+        IReadOnlyList<string> includedPaths = ImageScanner.EnumerateImagePaths(folder);
+        return ListComboSequencesFromPaths(includedPaths);
     }
 
     public static NetVips.Image RenderPreview(
@@ -80,7 +104,9 @@ public static class LayoutContracts
         int previewLongEdge = 1000,
         int? livePanSlot = null,
         double? livePanX = null,
-        double? livePanY = null)
+        double? livePanY = null,
+        bool noise = false,
+        bool orton = false)
     {
         return CollagePreviewRenderer.RenderManual(
             layoutName,
@@ -91,6 +117,8 @@ public static class LayoutContracts
             previewLongEdge,
             livePanSlot,
             livePanX,
-            livePanY);
+            livePanY,
+            noise,
+            orton);
     }
 }

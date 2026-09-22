@@ -134,6 +134,28 @@ public class CombinationTests
     }
 
     [Fact]
+    public void SubsetPathListYieldsFewerCandidatesThanFullFolder()
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            List<string> paths = CreateLandscapePhotos(temp, 10);
+            IReadOnlyList<IReadOnlyList<string>> full = LayoutContracts.ListLayoutCandidatesFromPaths(
+                paths, "stack-3", count: 1, batch: true, random: false, borderless: false);
+            IReadOnlyList<IReadOnlyList<string>> subset = LayoutContracts.ListLayoutCandidatesFromPaths(
+                paths.Take(6).ToList(), "stack-3", count: 1, batch: true, random: false, borderless: false);
+
+            Assert.Equal(3, full.Count);
+            Assert.Equal(2, subset.Count);
+            Assert.True(subset.Count < full.Count);
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
     public void NotEnoughImagesReturnsEmpty()
     {
         string temp = CreateTempDir();
@@ -184,7 +206,8 @@ public class CombinationTests
 
     private static List<string> CreateLandscapePhotos(string directory, int count)
     {
-        string synthDir = Path.Combine(directory, "_synth");
+        Directory.CreateDirectory(directory);
+        string synthDir = Path.Combine(Path.GetTempPath(), "image-stacker-tests", "synth", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(synthDir);
         string template = SyntheticImages.CreateLandscapeJpeg(synthDir);
 
@@ -201,7 +224,8 @@ public class CombinationTests
 
     private static List<string> CreatePortraitPhotos(string directory, int count)
     {
-        string synthDir = Path.Combine(directory, "_synth");
+        Directory.CreateDirectory(directory);
+        string synthDir = Path.Combine(Path.GetTempPath(), "image-stacker-tests", "synth", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(synthDir);
         string template = SyntheticImages.CreatePortraitJpeg(synthDir);
 

@@ -9,7 +9,9 @@ public sealed record ExportJob(
     bool Borderless,
     int JobIndex,
     IReadOnlyList<SlotAssignment>? Slots = null,
-    string? OutputPath = null);
+    string? OutputPath = null,
+    bool Noise = false,
+    bool Orton = false);
 
 public sealed record ExportJobResult(int Succeeded, int Failed, int Total);
 
@@ -62,7 +64,9 @@ public static class ExportJobRunner
                             outputPath,
                             bleed,
                             job.Slots,
-                            cache);
+                            cache,
+                            job.Noise,
+                            job.Orton);
 
                         Interlocked.Increment(ref succeeded);
                         onSuccess?.Invoke(outputPath);

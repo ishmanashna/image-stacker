@@ -1,3 +1,6 @@
+using ImageStacker.Core;
+using ImageStacker.Core.Io;
+
 namespace ImageStacker.Core.Layout;
 
 public sealed record CellRect(int X, int Y, int Width, int Height);
@@ -8,16 +11,23 @@ public sealed record LayoutGeometry(
     int TargetWidth,
     int TargetHeight,
     IReadOnlyList<CellRect> Positions,
-    IReadOnlyList<CellRect> CellSizes);
+    IReadOnlyList<CellRect> CellSizes,
+    int CanvasWidth,
+    int CanvasHeight);
 
 public static class LayoutGeometryCalculator
 {
     /// <summary>How far neighboring cells grow into each other along a shared seam when bleed is on.</summary>
     public const int BleedOverlapPx = 48;
 
-    public static LayoutGeometry Compute(string layoutName, bool borderless, bool bleed = false)
+    public static LayoutGeometry Compute(
+        string layoutName,
+        bool borderless,
+        bool bleed = false,
+        IReadOnlyList<string>? paths = null)
     {
         var config = LayoutCatalog.GetRequired(layoutName);
+        (int canvasW, int canvasH) = ResolveCanvasSize(layoutName, config, paths);
         int rows = config.Rows;
         int cols = config.Cols;
 
@@ -40,11 +50,11 @@ public static class LayoutGeometryCalculator
         }
 
         int totalSpacingH = (spacing * (rows - 1)) + (margin * 2);
-        int availableH = Constants.CanvasHeight - totalSpacingH;
+        int availableH = canvasH - totalSpacingH;
         int targetH = availableH / rows;
         int remH = availableH % rows;
         int totalSpacingW = (spacing * (cols - 1)) + (margin * 2);
-        int availableW = Constants.CanvasWidth - totalSpacingW;
+        int availableW = canvasW - totalSpacingW;
         int targetW = availableW / cols;
         int remW = availableW % cols;
 
@@ -106,8 +116,8 @@ public static class LayoutGeometryCalculator
 
                     x0 = Math.Max(0, x0);
                     y0 = Math.Max(0, y0);
-                    x1 = Math.Min(Constants.CanvasWidth, x1);
-                    y1 = Math.Min(Constants.CanvasHeight, y1);
+                    x1 = Math.Min(canvasW, x1);
+                    y1 = Math.Min(canvasH, y1);
 
                     int w = Math.Max(1, x1 - x0);
                     int hCell = Math.Max(1, y1 - y0);
@@ -123,6 +133,37 @@ public static class LayoutGeometryCalculator
             targetW,
             targetH,
             positions,
-            cellSizes);
+            cellSizes,
+            canvasW,
+            canvasH);
+    }
+
+    private static (int CanvasW, int CanvasH) ResolveCanvasSize(
+        string layoutName,
+        LayoutDefinition config,
+        IReadOnlyList<string>? paths)
+    {
+        if (string.Equals(layoutName, "stack-1", StringComparison.OrdinalIgnoreCase))
+        {
+            if (paths is { Count: > 0 })
+            {
+                if (OrientationHelper.TryGetOrientedDimensions(paths[0], out int width, out int height)
+                    || OrientationHelper.TryGetRawDimensions(paths[0], out width, out height))
+                {
+                    if (width > height)
+                    {
+                        return (Constants.CanvasHeight, Constants.CanvasWidth);
+                    }
+
+                    return (Constants.CanvasWidth, Constants.CanvasHeight);
+                }
+            }
+
+            return (Constants.CanvasWidth, Constants.CanvasHeight);
+        }
+
+        int canvasW = config.LandscapeCanvas ? Constants.CanvasHeight : Constants.CanvasWidth;
+        int canvasH = config.LandscapeCanvas ? Constants.CanvasWidth : Constants.CanvasHeight;
+        return (canvasW, canvasH);
     }
 }

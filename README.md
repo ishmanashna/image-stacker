@@ -57,11 +57,11 @@ dotnet run --project src/ImageStacker.Cli -- .\photos --layout grid-2x4 --batch 
 
 | Name | Slots | Notes |
 |------|-------|-------|
+| `stack-1` | 1 | One photo, portrait or landscape canvas to match |
 | `stack-2` | 2 | Horizontal strips |
 | `stack-3` | 3 | Horizontal strips |
 | `stack-4` | 4 | Horizontal strips |
 | `grid-1x2-v` | 2 | Two portrait columns |
-| `grid-1x3-h` | 3 | Three landscape cells |
 | `grid-1x3-v` | 3 | Three portrait cells |
 | `grid-2x4` | 8 | 4×2 grid |
 | `grid-3x3` | 9 | 3×3 grid |

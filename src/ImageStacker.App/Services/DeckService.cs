@@ -35,11 +35,11 @@ internal sealed class DeckService : IDisposable
         mode is "combo" or "batch" or "random" && jobCount > 1;
 
     /// <summary>
-    /// Refreshes deck previews when only color/bleed changed, or rebuilds card identities
-    /// when the candidate list changed. Returns true when card identities were rebuilt.
+    /// Rebuilds deck card identities from a fresh job list. Call only when folder, mode,
+    /// layout, or count change — not on focus, color, bleed, borderless, or stage-only refreshes.
     /// </summary>
-    public bool RefreshOrRebuild(
-        string inputFolder,
+    public void RebuildIdentity(
+        IReadOnlyList<string> includedPaths,
         string mode,
         string layout,
         int count,
@@ -47,17 +47,16 @@ internal sealed class DeckService : IDisposable
         string color,
         bool bleed)
     {
-        IReadOnlyList<ExportJob> jobs = ExportService.BuildJobs(inputFolder, mode, layout, count, borderless);
-
-        if (CandidatesMatch(Cards, jobs))
-        {
-            SoftRefresh(color, bleed);
-            return false;
-        }
-
+        IReadOnlyList<ExportJob> jobs = ExportService.BuildJobs(includedPaths, mode, layout, count, borderless);
         HardRebuild(jobs, color, bleed);
-        return true;
     }
+
+    /// <summary>
+    /// Updates render options on existing cards without rebuilding identities.
+    /// Pass borderless only when the mode shares one flag (not combo per-job).
+    /// </summary>
+    public void ApplyRenderOptions(string color, bool bleed, bool? borderless) =>
+        SoftRefresh(color, bleed, borderless);
 
     public void Clear()
     {
@@ -151,7 +150,7 @@ internal sealed class DeckService : IDisposable
         RequestPreviewForIndex(index);
     }
 
-    private void SoftRefresh(string color, bool bleed)
+    private void SoftRefresh(string color, bool bleed, bool? borderless)
     {
         CancelPreviews();
         _color = color;
@@ -159,6 +158,11 @@ internal sealed class DeckService : IDisposable
 
         foreach (DeckCardItem card in Cards)
         {
+            if (borderless is bool value)
+            {
+                card.Collage.Borderless = value;
+            }
+
             card.ClearPreviewState();
         }
     }
@@ -174,27 +178,16 @@ internal sealed class DeckService : IDisposable
             .ToList();
 
         Cards = cards;
-        FocusIndex = 0;
+        if (cards.Count == 0)
+        {
+            FocusIndex = 0;
+        }
+        else if (FocusIndex >= cards.Count)
+        {
+            FocusIndex = 0;
+        }
+
         UpdateFocusFlags();
-    }
-
-    private static bool CandidatesMatch(IReadOnlyList<DeckCardItem> cards, IReadOnlyList<ExportJob> jobs)
-    {
-        if (cards.Count != jobs.Count)
-        {
-            return false;
-        }
-
-        for (int i = 0; i < cards.Count; i++)
-        {
-            ExportJob job = jobs[i];
-            if (!cards[i].MatchesJob(job.JobIndex, job.LayoutName, job.Borderless, job.Paths))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private void UpdateFocusFlags()
@@ -231,7 +224,9 @@ internal sealed class DeckService : IDisposable
                     color,
                     bleed,
                     card.Collage.Slots,
-                    PreviewLongEdge);
+                    PreviewLongEdge,
+                    noise: card.Collage.Noise,
+                    orton: card.Collage.Orton);
                 BitmapBuffer buffer = VipsBitmapConverter.ImageToBuffer(preview);
 
                 if (token.IsCancellationRequested || generation != _previewGeneration)

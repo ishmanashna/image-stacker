@@ -57,6 +57,23 @@ public static class OrientationHelper
         }
     }
 
+    public static bool TryGetRawDimensions(string imagePath, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        try
+        {
+            using var image = Image.NewFromFile(imagePath, access: Enums.Access.Sequential);
+            width = image.Width;
+            height = image.Height;
+            return width > 0 && height > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static string? GetOrientationMismatchMessage(string imagePath, LayoutOrientation requiredOrientation)
     {
         if (requiredOrientation == LayoutOrientation.Mixed)

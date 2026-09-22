@@ -3,6 +3,7 @@ using ImageStacker.Core.Contracts;
 using ImageStacker.Core.Export;
 using ImageStacker.Core.Imaging;
 using ImageStacker.Core.Io;
+using ImageStacker.Core.Jobs;
 using ImageStacker.Core.Layout;
 using NetVips;
 
@@ -77,8 +78,9 @@ public class PreviewTests
 
             Assert.True(Math.Max(preview.Width, preview.Height) <= 1200);
             Assert.Equal(3, preview.Bands);
-            Assert.True(preview.Width < Constants.CanvasWidth);
-            Assert.True(preview.Height < Constants.CanvasHeight);
+            LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-3", borderless: false);
+            Assert.True(preview.Width < geom.CanvasWidth);
+            Assert.True(preview.Height < geom.CanvasHeight);
         }
         finally
         {
@@ -108,27 +110,153 @@ public class CanvasTests
     [Fact]
     public void ExportProduces3840x4800Canvas()
     {
+        AssertPortraitExportDimensions("stack-3", 3);
+    }
+
+    [Fact]
+    public void Stack1PortraitPhotoUses3840x4800Canvas()
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            string portrait = SyntheticImages.CreatePortraitJpeg(temp);
+            var paths = new List<string> { portrait };
+            LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-1", borderless: false, paths: paths);
+            Assert.Equal(Constants.CanvasWidth, geom.CanvasWidth);
+            Assert.Equal(Constants.CanvasHeight, geom.CanvasHeight);
+
+            string output = Path.Combine(temp, "out.jpg");
+            CollageExporter.ExportCollage(paths, "stack-1", borderless: false, color: "white", output);
+
+            using var result = Image.NewFromFile(output);
+            Assert.Equal(3840, result.Width);
+            Assert.Equal(4800, result.Height);
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public void Stack1LandscapePhotoUses4800x3840Canvas()
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            string landscape = SyntheticImages.CreateLandscapeJpeg(temp);
+            var paths = new List<string> { landscape };
+            LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-1", borderless: false, paths: paths);
+            Assert.Equal(4800, geom.CanvasWidth);
+            Assert.Equal(3840, geom.CanvasHeight);
+
+            string output = Path.Combine(temp, "out.jpg");
+            CollageExporter.ExportCollage(paths, "stack-1", borderless: false, color: "white", output);
+
+            using var result = Image.NewFromFile(output);
+            Assert.Equal(4800, result.Width);
+            Assert.Equal(3840, result.Height);
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public void Stack1BatchWritesOneFilePerPhoto()
+    {
         string temp = CreateTempDir();
         try
         {
             string folder = Path.Combine(temp, "photos");
             Directory.CreateDirectory(folder);
-            for (int i = 0; i < 3; i++)
+            File.Copy(SyntheticImages.CreatePortraitJpeg(temp), Path.Combine(folder, "a.jpg"));
+            File.Copy(SyntheticImages.CreateLandscapeJpeg(temp), Path.Combine(folder, "b.jpg"));
+            File.Copy(SyntheticImages.CreatePortraitJpeg(temp), Path.Combine(folder, "c.jpg"));
+
+            IReadOnlyList<string> validPaths = ImageScanner.GetValidPaths(folder, LayoutOrientation.Mixed);
+            IReadOnlyList<IReadOnlyList<string>> jobs = LayoutContracts.ListLayoutCandidatesFromPaths(
+                validPaths,
+                "stack-1",
+                count: 1,
+                batch: true,
+                random: false,
+                borderless: false);
+
+            Assert.Equal(3, jobs.Count);
+            string outDir = Path.Combine(temp, "out");
+            Directory.CreateDirectory(outDir);
+            for (int i = 0; i < jobs.Count; i++)
+            {
+                string output = Path.Combine(outDir, $"job_{i:00}.jpg");
+                CollageExporter.ExportCollage(jobs[i], "stack-1", borderless: false, color: "white", output);
+                using var result = Image.NewFromFile(output);
+                LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-1", borderless: false, paths: jobs[i]);
+                Assert.Equal(geom.CanvasWidth, result.Width);
+                Assert.Equal(geom.CanvasHeight, result.Height);
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public void ExportGrid2x2HProduces4800x3840Canvas()
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            string folder = Path.Combine(temp, "photos");
+            Directory.CreateDirectory(folder);
+            for (int i = 0; i < 4; i++)
             {
                 File.Copy(SyntheticImages.CreateLandscapeJpeg(temp), Path.Combine(folder, $"img_{i:00}.jpg"));
             }
 
+            var paths = Directory.GetFiles(folder).OrderBy(p => p, StringComparer.Ordinal).Take(4).ToList();
+            LayoutGeometry geom = LayoutGeometryCalculator.Compute("grid-2x2-h", borderless: false);
+            Assert.Equal(4800, geom.CanvasWidth);
+            Assert.Equal(3840, geom.CanvasHeight);
+
             string output = Path.Combine(temp, "out.jpg");
-            CollageExporter.ExportCollage(
-                Directory.GetFiles(folder).OrderBy(p => p, StringComparer.Ordinal).Take(3).ToList(),
-                "stack-3",
-                borderless: false,
-                color: "white",
-                output);
+            CollageExporter.ExportCollage(paths, "grid-2x2-h", borderless: false, color: "white", output);
 
             using var result = Image.NewFromFile(output);
-            Assert.Equal(Constants.CanvasWidth, result.Width);
-            Assert.Equal(Constants.CanvasHeight, result.Height);
+            Assert.Equal(geom.CanvasWidth, result.Width);
+            Assert.Equal(geom.CanvasHeight, result.Height);
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    private static void AssertPortraitExportDimensions(string layout, int imageCount)
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            string folder = Path.Combine(temp, "photos");
+            Directory.CreateDirectory(folder);
+            for (int i = 0; i < imageCount; i++)
+            {
+                File.Copy(SyntheticImages.CreateLandscapeJpeg(temp), Path.Combine(folder, $"img_{i:00}.jpg"));
+            }
+
+            var paths = Directory.GetFiles(folder).OrderBy(p => p, StringComparer.Ordinal).Take(imageCount).ToList();
+            LayoutGeometry geom = LayoutGeometryCalculator.Compute(layout, borderless: false);
+            Assert.Equal(Constants.CanvasWidth, geom.CanvasWidth);
+            Assert.Equal(Constants.CanvasHeight, geom.CanvasHeight);
+
+            string output = Path.Combine(temp, "out.jpg");
+            CollageExporter.ExportCollage(paths, layout, borderless: false, color: "white", output);
+
+            using var result = Image.NewFromFile(output);
+            Assert.Equal(geom.CanvasWidth, result.Width);
+            Assert.Equal(geom.CanvasHeight, result.Height);
         }
         finally
         {
@@ -243,8 +371,8 @@ public class LayoutGeometryTests
             Assert.True(pos.Y >= 0);
             Assert.True(pos.Width > 0);
             Assert.True(pos.Height > 0);
-            Assert.True(pos.X + pos.Width <= Constants.CanvasWidth);
-            Assert.True(pos.Y + pos.Height <= Constants.CanvasHeight);
+            Assert.True(pos.X + pos.Width <= geometry.CanvasWidth);
+            Assert.True(pos.Y + pos.Height <= geometry.CanvasHeight);
         }
     }
 
@@ -256,8 +384,8 @@ public class LayoutGeometryTests
         Assert.Equal(0, geometry.Positions[0].Y);
         Assert.Equal(geometry.Positions[0].Y + geometry.Positions[0].Height, geometry.Positions[1].Y);
         Assert.Equal(geometry.Positions[1].Y + geometry.Positions[1].Height, geometry.Positions[2].Y);
-        Assert.Equal(Constants.CanvasHeight, geometry.Positions[2].Y + geometry.Positions[2].Height);
-        Assert.All(geometry.Positions, p => Assert.Equal(Constants.CanvasWidth, p.Width));
+        Assert.Equal(geometry.CanvasHeight, geometry.Positions[2].Y + geometry.Positions[2].Height);
+        Assert.All(geometry.Positions, p => Assert.Equal(geometry.CanvasWidth, p.Width));
     }
 
     [Fact]
@@ -274,8 +402,8 @@ public class LayoutGeometryTests
                 geometry.Positions[i].Y);
         }
 
-        Assert.Equal(Constants.CanvasHeight, geometry.Positions[3].Y + geometry.Positions[3].Height);
-        Assert.All(geometry.Positions, p => Assert.Equal(Constants.CanvasWidth, p.Width));
+        Assert.Equal(geometry.CanvasHeight, geometry.Positions[3].Y + geometry.Positions[3].Height);
+        Assert.All(geometry.Positions, p => Assert.Equal(geometry.CanvasWidth, p.Width));
     }
 
     [Fact]
@@ -287,13 +415,15 @@ public class LayoutGeometryTests
         Assert.Equal(LayoutOrientation.Horizontal, def.Orientation);
 
         LayoutGeometry framed = LayoutGeometryCalculator.Compute("grid-2x2-h", borderless: false);
+        Assert.Equal(4800, framed.CanvasWidth);
+        Assert.Equal(3840, framed.CanvasHeight);
         Assert.Equal(4, framed.Positions.Count);
         Assert.All(framed.Positions, p =>
         {
             Assert.True(p.X >= 150);
             Assert.True(p.Y >= 150);
-            Assert.True(p.X + p.Width <= Constants.CanvasWidth - 150);
-            Assert.True(p.Y + p.Height <= Constants.CanvasHeight - 150);
+            Assert.True(p.X + p.Width <= framed.CanvasWidth - 150);
+            Assert.True(p.Y + p.Height <= framed.CanvasHeight - 150);
         });
 
         LayoutGeometry borderless = LayoutGeometryCalculator.Compute("grid-2x2-h", borderless: true);
@@ -301,12 +431,11 @@ public class LayoutGeometryTests
     }
 
     [Fact]
-    public void Row1x3SplitsIntoHonestHAndVLayouts()
+    public void Row1x3CatalogHasVerticalOnly()
     {
         Assert.False(LayoutCatalog.Layouts.ContainsKey("grid-1x3-m"));
-        Assert.Equal(LayoutOrientation.Horizontal, LayoutCatalog.GetRequired("grid-1x3-h").Orientation);
+        Assert.False(LayoutCatalog.Layouts.ContainsKey("grid-1x3-h"));
         Assert.Equal(LayoutOrientation.Vertical, LayoutCatalog.GetRequired("grid-1x3-v").Orientation);
-        Assert.Equal(3, LayoutGeometryCalculator.Compute("grid-1x3-h", borderless: false).Positions.Count);
         Assert.Equal(3, LayoutGeometryCalculator.Compute("grid-1x3-v", borderless: false).Positions.Count);
     }
 
@@ -604,6 +733,182 @@ internal static class CoverMath
         double normLeft = excessW > 0 ? left / excessW : 0;
         double normTop = excessH > 0 ? top / excessH : 0;
         return (normLeft, normTop);
+    }
+}
+
+public class LayoutCardCopyTests
+{
+    private const char Times = '\u00D7';
+
+    [Fact]
+    public void FormatAxB_gridParsesFromId_stacksUseCatalogRowsCols()
+    {
+        LayoutDefinition grid24 = LayoutCatalog.GetRequired("grid-2x4");
+        Assert.Equal(4, grid24.Rows);
+        Assert.Equal(2, grid24.Cols);
+        Assert.Equal($"2{Times}4", LayoutCardCopy.FormatAxB("grid-2x4", grid24));
+
+        LayoutDefinition stack3 = LayoutCatalog.GetRequired("stack-3");
+        Assert.Equal($"3{Times}1", LayoutCardCopy.FormatAxB("stack-3", stack3));
+
+        LayoutDefinition stack1 = LayoutCatalog.GetRequired("stack-1");
+        Assert.Equal($"1{Times}1", LayoutCardCopy.FormatAxB("stack-1", stack1));
+    }
+
+    [Fact]
+    public void Stack1CardShowsOutPhoto()
+    {
+        LayoutDefinition stack1 = LayoutCatalog.GetRequired("stack-1");
+        string card = LayoutCardCopy.BuildCardText("stack-1", stack1);
+        Assert.Contains("Stack 1", card);
+        Assert.Contains("in any", card);
+        Assert.Contains("out photo", card);
+        Assert.Contains($"1{Times}1", card);
+    }
+
+    [Fact]
+    public void LandscapeCanvas_trueOnlyOnGrid2x2H()
+    {
+        Assert.True(LayoutCatalog.GetRequired("grid-2x2-h").LandscapeCanvas);
+        Assert.False(LayoutCatalog.GetRequired("grid-2x4").LandscapeCanvas);
+        Assert.False(LayoutCatalog.GetRequired("grid-2x2-v").LandscapeCanvas);
+        Assert.False(LayoutCatalog.GetRequired("stack-1").LandscapeCanvas);
+    }
+
+    [Fact]
+    public void Stack1IsNotInComboJobSpecs()
+    {
+        Assert.DoesNotContain(
+            ComboJobSpecs.All,
+            spec => string.Equals(spec.LayoutName, "stack-1", StringComparison.OrdinalIgnoreCase));
+    }
+}
+
+public class ThumbChromaClassifierTests
+{
+    private static byte[] SolidRgb24(int width, int height, byte r, byte g, byte b)
+    {
+        var pixels = new byte[width * height * 3];
+        for (int i = 0; i < pixels.Length; i += 3)
+        {
+            pixels[i] = r;
+            pixels[i + 1] = g;
+            pixels[i + 2] = b;
+        }
+
+        return pixels;
+    }
+
+    [Fact]
+    public void IsMonochromeRgb24_distinguishes_gray_and_red_at_64px()
+    {
+        const int size = 64;
+        byte[] gray = SolidRgb24(size, size, 128, 128, 128);
+        byte[] red = SolidRgb24(size, size, 255, 0, 0);
+        byte[] fadedGray = SolidRgb24(size, size, 120, 128, 136);
+
+        Assert.True(ThumbChromaClassifier.IsMonochromeRgb24(gray, size, size));
+        Assert.False(ThumbChromaClassifier.IsMonochromeRgb24(red, size, size));
+        Assert.True(ThumbChromaClassifier.IsMonochromeRgb24(fadedGray, size, size));
+        Assert.Equal(0, ThumbChromaClassifier.GetPixelChroma(128, 128, 128));
+        Assert.Equal(255, ThumbChromaClassifier.GetPixelChroma(255, 0, 0));
+    }
+}
+
+public class PostComposeEffectsTests
+{
+    [Fact]
+    public void NoiseChangesPixelsComparedToDryExport()
+    {
+        var paths = CreateStack3Paths();
+        using var dry = CollageExporter.BuildCollageImage(
+            paths, "stack-3", borderless: false, color: "white", noise: false, orton: false);
+        using var withNoise = CollageExporter.BuildCollageImage(
+            paths, "stack-3", borderless: false, color: "white", noise: true, orton: false);
+
+        Assert.Equal(dry.Width, withNoise.Width);
+        Assert.Equal(dry.Height, withNoise.Height);
+        Assert.True(MeanAbsoluteDifference(dry, withNoise) > 0.5);
+    }
+
+    [Fact]
+    public void OrtonChangesPixelsComparedToDryExport()
+    {
+        var paths = CreateStack3Paths();
+        using var dry = CollageExporter.BuildCollageImage(
+            paths, "stack-3", borderless: false, color: "white", noise: false, orton: false);
+        using var withOrton = CollageExporter.BuildCollageImage(
+            paths, "stack-3", borderless: false, color: "white", noise: false, orton: true);
+
+        Assert.Equal(dry.Width, withOrton.Width);
+        Assert.Equal(dry.Height, withOrton.Height);
+        Assert.True(MeanAbsoluteDifference(dry, withOrton) > 0.5);
+    }
+
+    [Fact]
+    public void EffectsOffExportKeepsGeometryCanvasJpegDimensions()
+    {
+        string temp = CreateTempDir();
+        try
+        {
+            var paths = CreateStack3Paths(temp);
+            LayoutGeometry geom = LayoutGeometryCalculator.Compute("stack-3", borderless: false);
+            string output = Path.Combine(temp, "dry.jpg");
+            CollageExporter.ExportCollage(
+                paths,
+                "stack-3",
+                borderless: false,
+                color: "white",
+                output,
+                noise: false,
+                orton: false);
+
+            using var result = Image.NewFromFile(output);
+            Assert.Equal(geom.CanvasWidth, result.Width);
+            Assert.Equal(geom.CanvasHeight, result.Height);
+            Assert.Equal(Constants.CanvasWidth, result.Width);
+            Assert.Equal(Constants.CanvasHeight, result.Height);
+        }
+        finally
+        {
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    private static List<string> CreateStack3Paths(string? tempRoot = null)
+    {
+        string temp = tempRoot ?? CreateTempDir();
+        string folder = Path.Combine(temp, "photos");
+        Directory.CreateDirectory(folder);
+        for (int i = 0; i < 3; i++)
+        {
+            File.Copy(SyntheticImages.CreateLandscapeJpeg(temp), Path.Combine(folder, $"img_{i:00}.jpg"));
+        }
+
+        return Directory.GetFiles(folder).OrderBy(p => p, StringComparer.Ordinal).Take(3).ToList();
+    }
+
+    private static double MeanAbsoluteDifference(Image a, Image b)
+    {
+        using var diff = a.Subtract(b).Abs();
+        return diff.Avg();
+    }
+
+    private static string CreateTempDir() =>
+        Path.Combine(Path.GetTempPath(), "image-stacker-tests", Guid.NewGuid().ToString("N"));
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+        }
     }
 }
 

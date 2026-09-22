@@ -22,6 +22,10 @@ internal sealed class EditableCollage
 
     public bool Borderless { get; set; }
 
+    public bool Noise { get; set; }
+
+    public bool Orton { get; set; }
+
     public IReadOnlyList<string> Paths { get; }
 
     public List<SlotAssignment?> Slots { get; }
@@ -38,7 +42,6 @@ internal sealed class EditableCollage
 
     public bool MatchesJob(ExportJob job) =>
         string.Equals(Layout, job.LayoutName, StringComparison.OrdinalIgnoreCase) &&
-        Borderless == job.Borderless &&
         Paths.SequenceEqual(job.Paths, StringComparer.OrdinalIgnoreCase);
 
     private static List<SlotAssignment?> MaterializeSlots(string layout, IReadOnlyList<string> paths)

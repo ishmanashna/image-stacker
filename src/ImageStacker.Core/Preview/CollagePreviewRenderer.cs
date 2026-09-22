@@ -15,9 +15,11 @@ public static class CollagePreviewRenderer
         object color,
         bool bleed = false,
         IReadOnlyList<SlotAssignment>? slots = null,
-        int previewLongEdge = 1000)
+        int previewLongEdge = 1000,
+        bool noise = false,
+        bool orton = false)
     {
-        LayoutGeometry geometry = LayoutGeometryCalculator.Compute(layoutName, borderless, bleed);
+        LayoutGeometry geometry = LayoutGeometryCalculator.Compute(layoutName, borderless, bleed, orderedPaths);
         if (orderedPaths.Count != geometry.NumImages)
         {
             throw new ArgumentException(
@@ -30,9 +32,9 @@ public static class CollagePreviewRenderer
                 $"slot assignments length must be {geometry.NumImages}, got {slots.Count}.");
         }
 
-        double scale = previewLongEdge / (double)Math.Max(Constants.CanvasWidth, Constants.CanvasHeight);
-        int canvasW = Math.Max(1, (int)Math.Round(Constants.CanvasWidth * scale));
-        int canvasH = Math.Max(1, (int)Math.Round(Constants.CanvasHeight * scale));
+        double scale = previewLongEdge / (double)Math.Max(geometry.CanvasWidth, geometry.CanvasHeight);
+        int canvasW = Math.Max(1, (int)Math.Round(geometry.CanvasWidth * scale));
+        int canvasH = Math.Max(1, (int)Math.Round(geometry.CanvasHeight * scale));
         ScaleGeometrySeamless(geometry, scale, canvasW, canvasH, out var scaledPositions, out var scaledCellSizes);
 
         var canvasColor = ColorParser.Parse(color);
@@ -79,7 +81,15 @@ public static class CollagePreviewRenderer
             cells.Add(processed);
         }
 
-        return CollageExporter.ComposeCanvas(cells, canvasColor, scaledPositions, canvasW, canvasH);
+        NetVips.Image result = CollageExporter.ComposeCanvas(
+            cells, canvasColor, scaledPositions, canvasW, canvasH);
+        if (noise || orton)
+        {
+            using var composed = result;
+            result = PostComposeEffects.Apply(composed, noise, orton);
+        }
+
+        return result;
     }
 
     public static NetVips.Image RenderManual(
@@ -91,18 +101,21 @@ public static class CollagePreviewRenderer
         int previewLongEdge = 1000,
         int? livePanSlot = null,
         double? livePanX = null,
-        double? livePanY = null)
+        double? livePanY = null,
+        bool noise = false,
+        bool orton = false)
     {
-        LayoutGeometry geometry = LayoutGeometryCalculator.Compute(layoutName, borderless, bleed);
+        IReadOnlyList<string>? canvasPaths = ResolveCanvasPathsForManual(layoutName, slots);
+        LayoutGeometry geometry = LayoutGeometryCalculator.Compute(layoutName, borderless, bleed, canvasPaths);
         if (slots.Count != geometry.NumImages)
         {
             throw new ArgumentException(
                 $"Need exactly {geometry.NumImages} slot entries for layout '{layoutName}', got {slots.Count}.");
         }
 
-        double scale = previewLongEdge / (double)Math.Max(Constants.CanvasWidth, Constants.CanvasHeight);
-        int canvasW = Math.Max(1, (int)Math.Round(Constants.CanvasWidth * scale));
-        int canvasH = Math.Max(1, (int)Math.Round(Constants.CanvasHeight * scale));
+        double scale = previewLongEdge / (double)Math.Max(geometry.CanvasWidth, geometry.CanvasHeight);
+        int canvasW = Math.Max(1, (int)Math.Round(geometry.CanvasWidth * scale));
+        int canvasH = Math.Max(1, (int)Math.Round(geometry.CanvasHeight * scale));
         ScaleGeometrySeamless(geometry, scale, canvasW, canvasH, out var scaledPositions, out var scaledCellSizes);
 
         var canvasColor = ColorParser.Parse(color);
@@ -144,7 +157,35 @@ public static class CollagePreviewRenderer
             cells.Add(processed);
         }
 
-        return CollageExporter.ComposeCanvas(cells, canvasColor, scaledPositions, canvasW, canvasH);
+        NetVips.Image result = CollageExporter.ComposeCanvas(
+            cells, canvasColor, scaledPositions, canvasW, canvasH);
+        if (noise || orton)
+        {
+            using var composed = result;
+            result = PostComposeEffects.Apply(composed, noise, orton);
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<string>? ResolveCanvasPathsForManual(
+        string layoutName,
+        IReadOnlyList<SlotAssignment?> slots)
+    {
+        if (!string.Equals(layoutName, "stack-1", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        foreach (SlotAssignment? slot in slots)
+        {
+            if (!string.IsNullOrWhiteSpace(slot?.Path))
+            {
+                return new[] { slot.Path };
+            }
+        }
+
+        return null;
     }
 
     private static NetVips.Image CreateEmptySlotCell(int width, int height)
@@ -191,12 +232,12 @@ public static class CollagePreviewRenderer
                 y0 = 0;
             }
 
-            if (pos.X + size.Width >= Constants.CanvasWidth)
+            if (pos.X + size.Width >= geometry.CanvasWidth)
             {
                 x1 = canvasW;
             }
 
-            if (pos.Y + size.Height >= Constants.CanvasHeight)
+            if (pos.Y + size.Height >= geometry.CanvasHeight)
             {
                 y1 = canvasH;
             }

@@ -1,4 +1,3 @@
-using ImageStacker.Core;
 using ImageStacker.Core.Layout;
 
 namespace ImageStacker.App.Services;
@@ -7,13 +6,13 @@ internal static class ManualStageGeometry
 {
     public sealed record StageMetrics(double Scale, double OffsetX, double OffsetY, double DisplayWidth, double DisplayHeight);
 
-    public static StageMetrics ComputeMetrics(double stageWidth, double stageHeight)
+    public static StageMetrics ComputeMetrics(double stageWidth, double stageHeight, int canvasW, int canvasH)
     {
         double sw = Math.Max(stageWidth, 50);
         double sh = Math.Max(stageHeight, 50);
-        double scale = Math.Min(sw / Constants.CanvasWidth, sh / Constants.CanvasHeight);
-        double cw = Constants.CanvasWidth * scale;
-        double ch = Constants.CanvasHeight * scale;
+        double scale = Math.Min(sw / canvasW, sh / canvasH);
+        double cw = canvasW * scale;
+        double ch = canvasH * scale;
         double ox = (sw - cw) / 2.0;
         double oy = (sh - ch) / 2.0;
         return new StageMetrics(scale, ox, oy, cw, ch);

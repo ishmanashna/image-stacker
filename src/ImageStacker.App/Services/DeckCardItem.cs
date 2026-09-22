@@ -106,9 +106,9 @@ internal sealed class DeckCardItem : INotifyPropertyChanged
         PreviewLoading = false;
     }
 
-    internal bool MatchesJob(int jobIndex, string layoutName, bool borderless, IReadOnlyList<string> paths) =>
+    internal bool MatchesJob(int jobIndex, string layoutName, IReadOnlyList<string> paths) =>
         DeckIndex == jobIndex &&
-        Collage.MatchesJob(new ExportJob(paths, layoutName, borderless, jobIndex));
+        Collage.MatchesJob(new ExportJob(paths, layoutName, Borderless, jobIndex));
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

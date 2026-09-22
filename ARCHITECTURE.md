@@ -32,7 +32,7 @@ ImageScanner / OrientationHelper ──► candidate lists (single / batch / ran
 
 ## Layouts and modes
 
-Layouts live in Core (`LayoutCatalog` / `LayoutGeometryCalculator`): stack-2/3/4, grid-1x2-v, grid-1x3-h/v, grid-2x4, grid-3x3, grid-2x2-v/h. Geometry includes spacing, framed margins, and seam-overlap bleed.
+Layouts live in Core (`LayoutCatalog` / `LayoutGeometryCalculator`): stack-1/2/3/4, grid-1x2-v, grid-1x3-v, grid-2x4, grid-3x3, grid-2x2-v/h. Portrait canvas 3840×4800, landscape 4800×3840 for Grid 2×2 H and Stack 1 landscapes.
 
 Modes: single (first N), batch (non-overlapping chunks), random (`--count` groups), combo (fixed 40-job standard set), blank collage (user-filled slots with pan/flip/gray). Any generated collage can be edited on the stage in other modes too.
 

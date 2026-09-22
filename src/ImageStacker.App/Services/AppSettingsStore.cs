@@ -46,7 +46,17 @@ internal static class AppSettingsStore
         {
             string json = File.ReadAllText(path);
             AppSettings? settings = JsonSerializer.Deserialize<AppSettings>(json);
-            return settings ?? new AppSettings();
+            if (settings is null)
+            {
+                return new AppSettings();
+            }
+
+            if (string.Equals(settings.Layout, "grid-1x3-h", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Layout = "grid-1x3-v";
+            }
+
+            return settings;
         }
         catch (Exception ex)
         {

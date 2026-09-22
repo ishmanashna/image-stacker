@@ -1,14 +1,29 @@
 using ImageStacker.Core;
 using ImageStacker.Core.Layout;
 using ImageStacker.Core.Contracts;
+using ImageStacker.Core.Io;
 using ImageStacker.Core.Jobs;
 
 namespace ImageStacker.App.Services;
 
 internal static class ExportService
 {
+  /// <summary>
+  /// Full candidate paths from disk (Phase 7). App filters by include/exclude before job generation (Phase 8).
+  /// </summary>
+  public static IReadOnlyList<string> ResolveIncludedPaths(string inputFolder, string mode, string layout)
+  {
+    if (mode == "combo")
+    {
+      return ImageScanner.EnumerateImagePaths(inputFolder);
+    }
+
+    LayoutDefinition definition = LayoutCatalog.GetRequired(layout);
+    return ImageScanner.GetValidPaths(inputFolder, definition.Orientation);
+  }
+
   public static IReadOnlyList<ExportJob> BuildJobs(
-    string inputFolder,
+    IReadOnlyList<string> includedPaths,
     string mode,
     string layout,
     int count,
@@ -16,15 +31,15 @@ internal static class ExportService
   {
     return mode switch
     {
-      "combo" => BuildComboJobs(inputFolder),
-      "batch" => BuildLayoutJobs(inputFolder, layout, 1, batch: true, random: false, borderless),
-      "random" => BuildLayoutJobs(inputFolder, layout, count, batch: false, random: true, borderless),
-      _ => BuildLayoutJobs(inputFolder, layout, count, batch: false, random: false, borderless),
+      "combo" => BuildComboJobs(includedPaths),
+      "batch" => BuildLayoutJobs(includedPaths, layout, 1, batch: true, random: false, borderless),
+      "random" => BuildLayoutJobs(includedPaths, layout, count, batch: false, random: true, borderless),
+      _ => BuildLayoutJobs(includedPaths, layout, count, batch: false, random: false, borderless),
     };
   }
 
   public static int EstimateOutputCount(
-    string inputFolder,
+    IReadOnlyList<string> includedPaths,
     string mode,
     string layout,
     int count,
@@ -35,13 +50,13 @@ internal static class ExportService
       return 1;
     }
 
-    return BuildJobs(inputFolder, mode, layout, count, borderless).Count;
+    return BuildJobs(includedPaths, mode, layout, count, borderless).Count;
   }
 
-  private static List<ExportJob> BuildComboJobs(string inputFolder)
+  private static List<ExportJob> BuildComboJobs(IReadOnlyList<string> includedPaths)
   {
     IReadOnlyList<(IReadOnlyList<string> Paths, string LayoutName, bool Borderless)> sequences =
-      LayoutContracts.ListComboSequences(inputFolder);
+      LayoutContracts.ListComboSequencesFromPaths(includedPaths);
 
     return sequences
       .Select((seq, index) => new ExportJob(seq.Paths, seq.LayoutName, seq.Borderless, index + 1))
@@ -49,15 +64,15 @@ internal static class ExportService
   }
 
   private static List<ExportJob> BuildLayoutJobs(
-    string inputFolder,
+    IReadOnlyList<string> includedPaths,
     string layout,
     int count,
     bool batch,
     bool random,
     bool borderless)
   {
-    IReadOnlyList<IReadOnlyList<string>> candidates = LayoutContracts.ListLayoutCandidates(
-      inputFolder,
+    IReadOnlyList<IReadOnlyList<string>> candidates = LayoutContracts.ListLayoutCandidatesFromPaths(
+      includedPaths,
       layout,
       count,
       batch,
@@ -76,7 +91,15 @@ internal static class ExportService
   {
     var paths = collage.Slots.Select(s => s!.Path).ToList();
     var slots = collage.Slots.Select(s => s!).ToList();
-    return new ExportJob(paths, collage.Layout, collage.Borderless, jobIndex, slots, outputPath);
+    return new ExportJob(
+      paths,
+      collage.Layout,
+      collage.Borderless,
+      jobIndex,
+      slots,
+      outputPath,
+      collage.Noise,
+      collage.Orton);
   }
 
   public static string? ValidateCollage(EditableCollage collage, string? context = null)
@@ -113,7 +136,8 @@ internal static class ExportService
     string mode,
     string layout,
     int count,
-    bool borderless)
+    bool borderless,
+    IReadOnlyList<string>? includedPaths = null)
   {
     if (mode != "manual" && !Directory.Exists(inputFolder))
     {
@@ -134,6 +158,8 @@ internal static class ExportService
       return null;
     }
 
+    includedPaths ??= ResolveIncludedPaths(inputFolder, mode, layout);
+
     if (mode != "combo")
     {
       if (!LayoutCatalog.Layouts.ContainsKey(layout))
@@ -141,12 +167,12 @@ internal static class ExportService
         return $"Unknown layout '{layout}'.";
       }
 
-      if (EstimateOutputCount(inputFolder, mode, layout, count, borderless) == 0)
+      if (EstimateOutputCount(includedPaths, mode, layout, count, borderless) == 0)
       {
         return "Nothing to generate — check photos and mode (not enough matching images?).";
       }
     }
-    else if (BuildComboJobs(inputFolder).Count == 0)
+    else if (BuildComboJobs(includedPaths).Count == 0)
     {
       return "Nothing to generate — check photos and orientations for combo mode.";
     }

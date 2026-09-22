@@ -231,7 +231,9 @@ internal sealed class PreviewStageService : IDisposable
                     PreviewLongEdge,
                     live?.LivePanSlot,
                     live?.LivePanX,
-                    live?.LivePanY);
+                    live?.LivePanY,
+                    request.Noise,
+                    request.Orton);
                 return VipsBitmapConverter.ImageToBuffer(preview);
             }, token).ConfigureAwait(true);
 
@@ -307,6 +309,8 @@ internal sealed record PreviewRequest(
     bool Borderless,
     bool Bleed,
     string Color,
+    bool Noise,
+    bool Orton,
     EditableCollage? FocusedCollage,
     int FocusIndex,
     int FocusCount);

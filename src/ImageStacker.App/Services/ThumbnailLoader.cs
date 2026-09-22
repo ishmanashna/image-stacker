@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -6,11 +8,47 @@ using ImageStacker.Core;
 
 namespace ImageStacker.App.Services;
 
-internal sealed class ThumbnailItem
+internal sealed class ThumbnailItem : INotifyPropertyChanged
 {
+    private bool _included = true;
+
     public required string Path { get; init; }
     public WriteableBitmap? Bitmap { get; set; }
     public string FileName => System.IO.Path.GetFileName(Path);
+
+    public bool Included
+    {
+        get => _included;
+        set
+        {
+            if (_included == value)
+            {
+                return;
+            }
+
+            _included = value;
+            OnPropertyChanged();
+            IncludedChanged?.Invoke(this);
+        }
+    }
+
+    public Action<ThumbnailItem>? IncludedChanged { get; set; }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public void SyncIncluded(bool included)
+    {
+        if (_included == included)
+        {
+            return;
+        }
+
+        _included = included;
+        OnPropertyChanged();
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 internal sealed class ThumbnailLoader : IDisposable
@@ -56,7 +94,7 @@ internal sealed class ThumbnailLoader : IDisposable
         }
 
         List<string> paths = Directory
-            .EnumerateFiles(folder)
+            .EnumerateFiles(folder, "*", SearchOption.AllDirectories)
             .Where(p => Constants.ImageExtensions.Contains(System.IO.Path.GetExtension(p)))
             .Select(System.IO.Path.GetFullPath)
             .OrderBy(p => p, StringComparer.Ordinal)

@@ -45,8 +45,9 @@ internal static class Program
 
     private static int RunCombo(CliOptions options)
     {
+        IReadOnlyList<string> includedPaths = ImageScanner.EnumerateImagePaths(options.InputFolder);
         IReadOnlyList<(IReadOnlyList<string> Paths, string LayoutName, bool Borderless)> sequences =
-            LayoutContracts.ListComboSequences(options.InputFolder);
+            LayoutContracts.ListComboSequencesFromPaths(includedPaths);
 
         if (sequences.Count == 0)
         {
@@ -74,8 +75,11 @@ internal static class Program
     private static int RunLayout(CliOptions options)
     {
         LayoutDefinition layout = LayoutCatalog.GetRequired(options.Layout);
-        IReadOnlyList<IReadOnlyList<string>> candidates = LayoutContracts.ListLayoutCandidates(
+        IReadOnlyList<string> validPaths = ImageScanner.GetValidPaths(
             options.InputFolder,
+            layout.Orientation);
+        IReadOnlyList<IReadOnlyList<string>> candidates = LayoutContracts.ListLayoutCandidatesFromPaths(
+            validPaths,
             options.Layout,
             options.Count,
             options.Batch,
@@ -84,9 +88,6 @@ internal static class Program
 
         if (candidates.Count == 0)
         {
-            IReadOnlyList<string> validPaths = ImageScanner.GetValidPaths(
-                options.InputFolder,
-                layout.Orientation);
 
             if (validPaths.Count < layout.NumImages)
             {
@@ -157,7 +158,7 @@ internal static class Program
               --color <name|#RRGGBB>    Background color (default: white)
 
             Layouts:
-              stack-2, stack-3, stack-4, grid-1x2-v, grid-1x3-h, grid-1x3-v, grid-2x4, grid-3x3, grid-2x2-v, grid-2x2-h
+              stack-1, stack-2, stack-3, stack-4, grid-1x2-v, grid-1x3-v, grid-2x4, grid-3x3, grid-2x2-v, grid-2x2-h
 
             Examples:
               dotnet run --project src/ImageStacker.Cli -- "C:\photos" --layout stack-3 --output "C:\out"
