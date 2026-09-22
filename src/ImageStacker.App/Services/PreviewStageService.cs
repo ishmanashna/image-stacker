@@ -347,13 +347,15 @@ internal sealed class PreviewStageService : IDisposable
             noise: false,
             orton: false);
 
+        using var dryMemory = ImagePipeline.MaterializeRgb(dryCompose);
+
         token.ThrowIfCancellationRequested();
         if (!token.IsCancellationRequested)
         {
-            UpdateDryCache(cacheKey, dryCompose);
+            UpdateDryCache(cacheKey, dryMemory);
         }
 
-        return ApplyStageEffects(dryCompose, request, collage);
+        return ApplyStageEffects(dryMemory, request, collage);
     }
 
     private NetVips.Image ApplyStageEffects(
@@ -390,7 +392,7 @@ internal sealed class PreviewStageService : IDisposable
         lock (_dryCacheLock)
         {
             _dryCacheImage?.Dispose();
-            _dryCacheImage = dryCompose.CopyMemory();
+            _dryCacheImage = dryCompose.Copy();
             _dryCacheKey = cacheKey;
         }
     }

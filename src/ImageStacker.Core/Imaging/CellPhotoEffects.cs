@@ -24,8 +24,7 @@ public static class CellPhotoEffects
         }
 
         using var rgb = ImagePipeline.EnsureRgb(rgbCell);
-        // Gaussblur / Soft Light need random access. A header Copy() of a JPEG is still sequential.
-        using var memory = rgb.CopyMemory();
+        using var memory = ImagePipeline.MaterializeRgb(rgb);
         Image current = ToUnitDouble(memory);
 
         try
@@ -47,7 +46,7 @@ public static class CellPhotoEffects
             using (current)
             {
                 using var encoded = FromUnitDouble(current);
-                return encoded.CopyMemory();
+                return ImagePipeline.MaterializeRgb(encoded);
             }
         }
         catch
@@ -89,8 +88,7 @@ public static class CellPhotoEffects
             return ImagePipeline.EnsureRgb(rgb);
         }
 
-        using var ensured = ImagePipeline.EnsureRgb(rgb);
-        using var dryRgb = ensured.CopyMemory();
+        using var dryRgb = ImagePipeline.MaterializeRgb(rgb);
         Image effected = ApplyToCell(dryRgb, settings);
         if (protectColors.Length == 0)
         {
@@ -140,9 +138,9 @@ public static class CellPhotoEffects
             using (combined)
             {
                 using var restored = combined!.Ifthenelse(originalRgb, effectedRgb);
-                Image memory = restored.CopyMemory();
+                Image memory = ImagePipeline.MaterializeRgb(restored);
                 effectedRgb.Dispose();
-                return ImagePipeline.EnsureRgb(memory);
+                return memory;
             }
         }
         catch

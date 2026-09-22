@@ -50,6 +50,22 @@ public static class ImagePipeline
         return srgb.Copy();
     }
 
+    /// <summary>
+    /// Renders RGB pixels once into a random-access memory image. Needed before pan, blur, or a second read of a sequential JPEG.
+    /// </summary>
+    public static NetVips.Image MaterializeRgb(NetVips.Image image)
+    {
+        using var rgb = EnsureRgb(image);
+        byte[] pixels = rgb.WriteToMemory();
+        using var wrapped = NetVips.Image.NewFromMemory(
+            pixels,
+            rgb.Width,
+            rgb.Height,
+            rgb.Bands,
+            rgb.Format);
+        return wrapped.Copy(interpretation: Enums.Interpretation.Srgb);
+    }
+
     public static NetVips.Image CoverResizePanned(
         NetVips.Image source,
         int targetWidth,
@@ -172,7 +188,8 @@ public static class ImagePipeline
         bool grayscale)
     {
         using var loaded = LoadForPreview(path, targetWidth, targetHeight);
-        using var covered = CoverResizePanned(loaded, targetWidth, targetHeight, panX, panY);
+        using var decoded = MaterializeRgb(loaded);
+        using var covered = CoverResizePanned(decoded, targetWidth, targetHeight, panX, panY);
         return ApplyTransforms(covered, flipH, grayscale);
     }
 }
